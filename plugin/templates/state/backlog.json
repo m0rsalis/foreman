@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "updated": "{{NOW}}",
+  "statuses": ["inbox", "defined", "ready", "in_progress", "review", "blocked", "done"],
+  "rules": "{{OWNER}}'s priority (1 = next) beats the lead's rank. When a slot opens the lead takes the best ready item (dependencies done, not blocked); when unsure it asks {{OWNER}} with a recommendation.",
+  "items": []
+}

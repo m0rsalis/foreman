@@ -1,0 +1,12 @@
+{
+  "name": "claude-ops-kit",
+  "description": "A lead session that plans and merges, background agents that build, and an Ops panel that shows it all",
+  "owner": { "name": "Filip Koňařík" },
+  "plugins": [
+    {
+      "name": "ops-kit",
+      "source": "./plugin",
+      "description": "Ops panel, /ops-kit:init for any repo, and the lead's routines as skills"
+    }
+  ]
+}
