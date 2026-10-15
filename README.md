@@ -42,6 +42,8 @@ claude plugin marketplace add m0rsalis/claude-ops-kit --scope local
 claude plugin install ops-kit@claude-ops-kit --scope local
 ```
 
+If the add fails with "Could not read from remote repository" or "unable to get password", git is fetching as another GitHub account (for example a global `credential.https://github.com.username`). Name the account in the URL so the stored credential for it is used: `claude plugin marketplace add https://<your-account>@github.com/m0rsalis/claude-ops-kit.git --scope local` (`gh auth setup-git` stores one for the account `gh` is signed in as).
+
 `--scope local` keeps it to this repo (entries in its gitignored `.claude/settings.local.json`); use `--scope user` to have it in every repo. Or, at the prompt of a session in the repo: `/plugin install ops-kit --marketplace m0rsalis/claude-ops-kit`.
 
 Then start a new session in the repo (or `/reload-plugins` in an open one) and run:
