@@ -15,11 +15,17 @@ test-engine: ## The pane through Claude Code's own plugin test kit
 test-init: ## The init on scratch repos: files, idempotence, edits kept
 	bash test/init_test.sh
 
-test-tools: ## lead_status.py and run_action.sh
+test-tools: ## lead_status.py, run_action.sh, needs_lead.py, quiet.sh, claude-agents.sh, usage tools
 	bash test/tools_test.sh
+	bash test/lead_status_test.sh
+	bash test/needs_lead_test.sh
+	bash test/quiet_test.sh
+	bash test/claude_agents_test.sh
+	bash test/usage_test.sh
 
-test-queue: ## queue.sh: limits, stale locks, FIFO (about a minute)
+test-queue: ## queue.sh: limits, stale locks, FIFO; the full check and its cache (about two minutes)
 	bash test/queue_test.sh
+	bash test/check_speed_test.sh
 
 lint: ## shellcheck, Python, plugin validate, word and style scans
 	bash test/lint.sh

@@ -9,7 +9,7 @@ You run checks for {{PROJECT}}. You never edit code, resolve conflicts or change
 ## Typical job: check and merge a PR
 1. `cd` into the named worktree. `git fetch origin`, then `git merge --no-edit origin/main`. On any conflict: stop and report the conflicted files.
 2. Run `{{TOOLS}}/fullcheck.sh` from the worktree root in the background with output to a log file, and wait (it queues behind other agents). Read the log's final line.
-3. On `FULLCHECK: all green`: `git push`, `gh pr merge <n> --merge`, confirm with `gh pr view <n> --json state`.
+3. On `FULLCHECK: all green at <sha>` with `<sha>` the branch head and `git merge-base --is-ancestor origin/main <sha>` true after `git fetch` (otherwise go back to step 1): `git push`, `gh pr merge <n> --merge`, confirm with `gh pr view <n> --json state`.
 4. Otherwise: do not merge; report the failing part and the last 40 lines of the log.
 
 ## Rules

@@ -24,6 +24,10 @@ import {
   parsePrs,
   parseReviewNotes,
   parseSession,
+  parseAgentNames,
+  parseUsage,
+  agentLane,
+  laneViews,
   parseStatLines,
   parseStatus,
   parseTicketName,
@@ -31,7 +35,7 @@ import {
   parseWorktrees,
   resolveLocksDir,
 } from '../plugin/hooks/data.ts'
-import { agentColor, agentStatus, backlogNote, renderPanel, signoffTiles, slotBoxes } from '../plugin/hooks/view.ts'
+import { agentColor, agentStatus, backlogNote, freeLanes, readyTone, renderPanel, resetText, signoffTiles, slotBoxes, usageGauge } from '../plugin/hooks/view.ts'
 import { findAll, textUi, toText } from './text_ui.mjs'
 
 const NOW = Date.parse('2026-10-07T20:00:00Z')
@@ -325,7 +329,7 @@ test('checks: newest per branch and strips, bad lines skipped', () => {
 })
 
 test('sessions, PRs, docs, action state, stat lines', () => {
-  assert.deepEqual(parseSession('{"pid":5,"name":"x","kind":"bg","status":"busy","startedAt":10,"updatedAt":20,"cwd":"/r"}'), { name: 'x', pid: 5, kind: 'bg', status: 'busy', updatedMs: 20, startedMs: 10, cwd: '/r' })
+  assert.deepEqual(parseSession('{"pid":5,"name":"x","kind":"bg","status":"busy","startedAt":10,"updatedAt":20,"cwd":"/r"}'), { name: 'x', pid: 5, kind: 'bg', status: 'busy', updatedMs: 20, startedMs: 10, statusSinceMs: null, cwd: '/r' })
   assert.equal(parseSession('{nope'), null)
   assert.equal(parseSession('{"name":"x"}'), null)
   const prs = parsePrs(world().runs.find(([m]) => m(['/bin/gh', 'pr', 'list']))[1].stdout, Date.parse('2026-10-07T00:00:00Z'))
@@ -406,6 +410,7 @@ test('collect: missing status and docs are reported, never thrown', async () => 
 test('view helpers: slots, colours, status lines, tiles', () => {
   const agent = { name: 'a', state: 'running', startedMs: NOW - 65 * MIN, quietMinutes: 0, liveState: 'idle' }
   assert.equal(agentStatus(agent, NOW), 'running 1h 05m (idle)')
+  assert.equal(agentStatus({ ...agent, idleMinutes: 12 }, NOW), 'running 1h 05m (idle 12m)')
   assert.equal(agentStatus({ ...agent, state: 'stalled', quietMinutes: 40 }, NOW), 'stalled, quiet 40m · up 1h 05m')
   assert.equal(agentStatus({ ...agent, state: 'stopped', startedMs: null }, NOW), 'stopped')
   assert.notEqual(agentColor('running'), agentColor('stopped'))
@@ -435,4 +440,155 @@ test('the pane draws every section from the snapshot', async () => {
   assert.equal(toText(plain).join('\n').includes('DEPLOY STAGING'), false, 'no action configured: no section')
   const empty = renderPanel(textUi, { snapshot: null, isConfirming: false, notice: null, problem: 'Not set up' }, actions)
   assert.ok(toText(empty).join('\n').includes('Not set up'))
+})
+
+const USAGE_MAIN = {
+  schema: 1,
+  account: 'main',
+  plan: 'Team',
+  readAt: NOW - 2 * MIN,
+  windows: [
+    { id: 'five_hour', label: '5 hours', percentUsed: 41, resetsAt: NOW + 130 * MIN },
+    { id: 'seven_day', label: 'Week', percentUsed: 95.5, resetsAt: NOW + 3 * 86_400_000 },
+  ],
+}
+
+test('usage: parse a reading, clamp, stale after 15 minutes', () => {
+  const u = parseUsage(JSON.stringify(USAGE_MAIN), 'main', 'Main', NOW)
+  assert.deepEqual([u.plan, u.isStale, u.windows.map(w => [w.id, w.percentUsed, w.resetsAtMs])], ['Team', false, [['five_hour', 41, NOW + 130 * MIN], ['seven_day', 95.5, NOW + 3 * 86_400_000]]])
+  assert.equal(parseUsage(JSON.stringify(USAGE_MAIN), 'main', 'Main', NOW + 12 * MIN).isStale, false)
+  assert.equal(parseUsage(JSON.stringify(USAGE_MAIN), 'main', 'Main', NOW + 14 * MIN).isStale, true)
+  const odd = parseUsage(JSON.stringify({ windows: [{ label: 'x', percentUsed: 250 }, { label: 'no percent' }] }), 'agents', 'A', NOW)
+  assert.deepEqual([odd.windows.length, odd.windows[0].percentUsed, odd.isStale], [1, 100, true])
+  assert.throws(() => parseUsage('{"windows":[]}', 'main', 'Main', NOW))
+  assert.throws(() => parseUsage('{nope', 'main', 'Main', NOW))
+})
+
+test('usage: gauge colours and reset text', () => {
+  assert.equal(usageGauge(0).filled, 0)
+  assert.equal(usageGauge(50).filled, 5)
+  assert.notEqual(usageGauge(50).color, usageGauge(75).color)
+  assert.notEqual(usageGauge(75).color, usageGauge(95).color)
+  assert.match(resetText(NOW + 130 * MIN, NOW), /\(in 2h 10m\)$/)
+  assert.match(resetText(NOW + 3 * 86_400_000, NOW), /^resets [A-Z][a-z]{2} \d\d:\d\d \(in 3d/)
+  assert.equal(resetText(null, NOW), 'reset unknown')
+  assert.match(resetText(NOW - MIN, NOW), /\(due\)$/)
+})
+
+test('collect: both accounts, a missing file, a bad file, labels, live account per agent', async () => {
+  const w = world()
+  w.files['/r/tmp/ops/usage/main.json'] = JSON.stringify(USAGE_MAIN)
+  w.files['/r/tmp/ops/usage/agents.json'] = '{nope'
+  w.runs.push([has('/r/tools/ops-kit/claude-agents.sh'), ok(JSON.stringify([{ name: 'bglive', state: 'working' }, { name: 'demo-heartbeat', state: 'working' }, { name: 'lead' }]))])
+  w.runs.push([has('claude', 'agents'), ok(JSON.stringify([{ name: 'bggone', state: 'done' }, { name: 'lead' }]))])
+  const cfg = { ...config, agentsAccount: true, accounts: { agents: 'Max' } }
+  const snap = await collect(fakeIo(w), { repo: '/r', config: cfg, nowMs: NOW }, newCache())
+  assert.deepEqual(snap.usage.map(u => [u.account, u.label, u.windows.length]), [['main', 'Main', 2], ['agents', 'Max', 0]])
+  assert.match(snap.usage[1].error, /^unreadable/)
+  const by = Object.fromEntries(snap.agents.map(a => [a.name, a]))
+  assert.deepEqual([by.bglive.account, by.bggone.account, by.api.account], ['agents', 'main', null], 'live lists; interactive names do not count')
+  assert.equal(snap.heartbeatAccount, 'agents')
+  // Without the second account only the main reading is looked up.
+  const one = await collect(fakeIo(world()), { repo: '/r', config, nowMs: NOW }, newCache())
+  assert.deepEqual(one.usage.map(u => [u.account, u.error]), [['main', 'no reading yet']])
+  assert.deepEqual(one.errors, [])
+  assert.equal(one.agents.find(a => a.name === 'bglive').account, null)
+  assert.deepEqual(parseAgentNames('[{"name":"a","state":"working"},{"name":"b"},{"id":"c","state":"done"}]'), ['a', 'c'])
+})
+
+test('pane: usage rows, stale reading, heartbeat account', async () => {
+  const w = world()
+  w.files['/r/tmp/ops/usage/main.json'] = JSON.stringify(USAGE_MAIN)
+  w.files['/r/tmp/ops/usage/agents.json'] = JSON.stringify({ ...USAGE_MAIN, account: 'agents', readAt: NOW - 40 * MIN })
+  w.runs.push([has('/r/tools/ops-kit/claude-agents.sh'), ok(JSON.stringify([{ name: 'bglive', state: 'working' }]))])
+  const snap = await collect(fakeIo(w), { repo: '/r', config: { ...config, agentsAccount: true }, nowMs: NOW }, newCache())
+  const noop = () => {}
+  const actions = { refresh: noop, askAction: noop, confirmAction: noop, cancelAction: noop, openPreviews: noop }
+  const text = toText(renderPanel(textUi, { snapshot: snap, isConfirming: false, notice: null, problem: null }, actions)).join('\n')
+  assert.match(text, /USAGE/)
+  assert.match(text, /Main\s+Team/)
+  assert.match(text, /5 hours\s+━+╌+\s+41%/)
+  assert.match(text, /Week\s+━+╌*\s+96%/)
+  assert.match(text, /resets .*\(in 2h 10m\)/)
+  assert.match(text, /reading 40m old \(stale\)/)
+  assert.match(text, /♥ heartbeat/)
+})
+
+// --- lanes -------------------------------------------------------------------
+
+const LANES = [
+  { id: 'core', label: 'Core', cap: 1, owns: [], minReady: 2 },
+  { id: 'ui', label: 'UI', cap: 2, owns: [], minReady: 2 },
+  { id: 'flex', label: 'Flex', cap: 1, owns: [], minReady: 0 },
+]
+const bitem = (id, status, extra = {}) => ({ id, title: `Title ${id}`, track: 'x', size: 'M', status, priority: null, rank: 1, dependsOn: [], blockedBy: null, agent: null, ...extra })
+const backlogOf = (items, lanes = LANES) => parseBacklog(JSON.stringify({ schema: 1, items }), lanes)
+
+test('without lanes there is no lane logic; an unknown lane falls under flex with a note', () => {
+  const none = parseBacklog(JSON.stringify({ schema: 1, items: [bitem('B-1', 'ready')] }))
+  assert.deepEqual([none.lanes, none.items[0].lane], [[], null])
+  assert.deepEqual(laneViews([], [], none), [])
+  const b = backlogOf([bitem('B-1', 'ready', { lane: 'core' }), bitem('B-2', 'ready', { lane: 'moon' }), bitem('B-3', 'ready')])
+  assert.deepEqual(b.items.map(i => [i.id, i.lane, i.laneNote]), [['B-1', 'core', null], ['B-2', 'flex', 'moon'], ['B-3', 'flex', null]])
+  assert.match(backlogNote(b.items[1]), /unknown lane "moon"/)
+  const own = parseBacklog(JSON.stringify({ schema: 1, lanes: [{ id: 'a', label: 'Alpha', cap: 2 }, { id: 'b' }], items: [] }), LANES)
+  assert.deepEqual(own.lanes.map(l => [l.id, l.label, l.cap, l.minReady]), [['a', 'Alpha', 2, 2], ['b', 'b', 1, 2]], "the file's lanes win; minReady defaults to 2")
+})
+
+test('an agent takes its lane from status.json, else from its in-progress item, else the fallback', () => {
+  const b = backlogOf([bitem('B-1', 'in_progress', { lane: 'ui', agent: 'painter' }), bitem('B-2', 'ready', { lane: 'core', agent: 'x' })])
+  assert.equal(agentLane({ name: 'painter', lane: null }, b, LANES), 'ui')
+  assert.equal(agentLane({ name: 'painter', lane: 'core' }, b, LANES), 'core', 'status.json wins')
+  assert.equal(agentLane({ name: 'x', lane: null }, b, LANES), 'flex', 'only an in-progress item counts')
+  assert.equal(agentLane({ name: 'y', lane: 'moon' }, b, LANES), 'flex')
+  assert.equal(agentLane({ name: 'y', lane: null }, null, []), null)
+})
+
+test('lanes: over cap, free lanes, each lane its own next and ready count', () => {
+  const b = backlogOf([
+    bitem('B-1', 'ready', { lane: 'core', rank: 1 }),
+    bitem('B-2', 'ready', { lane: 'core', rank: 2 }),
+    bitem('B-3', 'ready', { lane: 'ui', rank: 3, dependsOn: ['B-9'] }),
+    bitem('B-4', 'defined', { lane: 'ui', rank: 4 }),
+  ])
+  const ag = (name, lane) => ({ name, lane, state: 'running' })
+  const views = laneViews(LANES, [ag('a', 'core'), ag('b', 'core'), ag('c', 'ui'), ag('d', 'ui')], b)
+  const by = id => views.find(v => v.id === id)
+  assert.deepEqual([by('core').isOver, by('ui').isOver, by('flex').isOver], [true, false, false])
+  assert.deepEqual(freeLanes(views).map(l => l.id), ['flex'], 'a lane at its cap is not free')
+  assert.deepEqual([by('core').next.id, by('core').ready], ['B-1', 2])
+  assert.deepEqual([by('ui').next, by('ui').ready, by('ui').open], [null, 0, 2], 'a ready item that waits is not pickable')
+  assert.deepEqual(b.items.filter(i => i.isNext).map(i => i.id), ['B-1'])
+})
+
+test('ready tone: minReady or more green, fewer amber, none red; a lane that keeps none stays plain', () => {
+  assert.equal(readyTone(2, 2).color, readyTone(5, 2).color)
+  assert.notEqual(readyTone(1, 2).color, readyTone(2, 2).color)
+  assert.deepEqual([readyTone(0, 2).text, readyTone(1, 2).text], ['no ready brief', '1 ready'])
+  assert.equal(readyTone(0, 0).text, '0 ready')
+})
+
+test('the pane shows a row per lane, the free lanes in the backlog header and the backlog grouped', async () => {
+  const w = world({
+    files: {
+      '/r/tmp/ops/backlog.json': JSON.stringify({
+        schema: 1,
+        lanes: LANES,
+        items: [bitem('B-1', 'ready', { lane: 'core', title: 'Hash pins' }), bitem('B-2', 'ready', { lane: 'core', rank: 2 }), bitem('B-3', 'ready', { lane: 'ui', rank: 3, dependsOn: ['B-7'] })],
+      }),
+      '/r/tmp/ops/status.json': JSON.stringify({ ...STATUS, agents: [{ name: 'u1', lane: 'ui' }, { name: 'u2', lane: 'ui' }, { name: 'u3', lane: 'ui' }] }),
+    },
+  })
+  const snap = await collect(fakeIo(w), { repo: '/r', config, nowMs: NOW }, newCache())
+  const noop = () => {}
+  const actions = { refresh: noop, askAction: noop, confirmAction: noop, cancelAction: noop, openPreviews: noop }
+  const text = toText(renderPanel(textUi, { snapshot: snap, isConfirming: false, notice: null, problem: null }, actions)).join('\n')
+  assert.match(text, /Core 0\/1/)
+  assert.match(text, /UI 3\/2/)
+  assert.match(text, /over cap/)
+  assert.match(text, /next B-1/)
+  assert.match(text, /Hash pins/)
+  assert.match(text, /next: none/)
+  assert.match(text, /BACKLOG.*free: core, flex/)
+  assert.match(text, /CORE\s+2 open/)
 })

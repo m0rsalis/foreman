@@ -7,7 +7,7 @@ description: Revive a background agent that died, stalled, or ended on a usage l
 
 Background sessions end (state `done`) when they hit a usage limit, and can die silently (blocked, no pid). A clear of the lead does not touch them.
 
-1. **Check it is really not running:** `claude agents --json --all`. Find it by name; note `state`, `id` and the full `sessionId`. If it is running or busy, do NOT resume: `--resume` on a live session starts a second copy working in the same worktree. Message it by name instead.
+1. **Check it is really not running:** `claude agents --json --all` (on the agents' account, `<toolsDir>/claude-agents.sh agents --json --all`; `lead_status.py` lists both). Find it by name; note `state`, `id` and the full `sessionId`. If it is running or busy, do NOT resume: `--resume` on a live session starts a second copy working in the same worktree. Message it by name instead.
 2. **Resume with the FULL session id** (a prefix can match the wrong session) and a message naming its worktree, because a resumed session may start in the main checkout:
 
 ```bash

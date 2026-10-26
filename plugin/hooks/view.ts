@@ -10,8 +10,8 @@ import type {
   RenderElement,
   TextProps,
 } from 'claude-code'
-import type { OpsActionRun, OpsAgent, OpsBacklogItem, OpsBacklogStatus, OpsDocItems, OpsLinkRef, OpsPr, OpsSnapshot } from '../types'
-import { basename, fileUrl, formatAge, truncate } from './data.ts'
+import type { OpsActionRun, OpsAgent, OpsBacklogItem, OpsBacklogStatus, OpsDocItems, OpsLaneView, OpsLinkRef, OpsPr, OpsSnapshot } from '../types'
+import { basename, fileUrl, formatAge, laneViews, truncate } from './data.ts'
 
 export type PanelUi = {
   Box: ElementConstructor<BoxProps>
@@ -87,7 +87,37 @@ export function agentStatus(a: OpsAgent, nowMs: number): string {
   const since = a.startedMs === null ? '' : formatAge(nowMs - a.startedMs)
   if (a.state === 'stopped') return since ? `stopped after ${since}` : 'stopped'
   if (a.state === 'stalled') return `stalled, quiet ${formatAge((a.quietMinutes ?? 0) * 60_000)}${since ? ` · up ${since}` : ''}`
-  return `running${since ? ` ${since}` : ''}${a.liveState === 'idle' ? ' (idle)' : ''}`
+  const idle = a.liveState === 'idle' ? (typeof a.idleMinutes !== 'number' ? ' (idle)' : ` (idle ${formatAge(a.idleMinutes * 60_000)})`) : ''
+  return `running${since ? ` ${since}` : ''}${idle}`
+}
+
+/** The lanes that have room for another agent (fewer agents than the cap), in display order. */
+export function freeLanes(lanes: OpsLaneView[]): OpsLaneView[] {
+  return lanes.filter(l => l.agents.length < l.cap)
+}
+
+/** How a lane's ready count reads: under its minReady is amber, none is red; a lane that keeps none is plain. */
+export function readyTone(ready: number, minReady: number): { text: string; color: string } {
+  if (minReady <= 0) return { text: `${ready} ready`, color: ready > 0 ? TONE.ok : GREY }
+  if (ready <= 0) return { text: 'no ready brief', color: TONE.bad }
+  return { text: `${ready} ready`, color: ready < minReady ? TONE.warn : TONE.ok }
+}
+
+const GAUGE_CELLS = 10
+
+/** A usage window as a gauge: cells filled with the share used, green under 70%, amber under 90%, red above. */
+export function usageGauge(percent: number): { filled: number; total: number; color: string } {
+  const p = Math.max(0, Math.min(100, percent))
+  return { filled: Math.round((p / 100) * GAUGE_CELLS), total: GAUGE_CELLS, color: p < 70 ? TONE.ok : p < 90 ? TONE.warn : TONE.bad }
+}
+
+/** "resets 18:00 (in 2h 10m)", with the weekday when it is not today. */
+export function resetText(resetsAtMs: number | null, nowMs: number): string {
+  if (resetsAtMs === null) return 'reset unknown'
+  const d = new Date(resetsAtMs)
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const day = d.toDateString() === new Date(nowMs).toDateString() ? '' : `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()]} `
+  return resetsAtMs <= nowMs ? `reset ${day}${hm} (due)` : `resets ${day}${hm} (in ${formatAge(resetsAtMs - nowMs)})`
 }
 
 /** The slot boxes: one per slot, filled with an agent's state or free; agents over the cap still show. */
@@ -122,6 +152,7 @@ export function backlogColor(status: OpsBacklogStatus): string {
 export function backlogNote(item: OpsBacklogItem): string | null {
   if (item.status === 'blocked') return `blocked: ${item.blockedBy ?? 'no reason given'}`
   if (item.waitsFor.length > 0) return `waits ${item.waitsFor.join(' ')}`
+  if (item.laneNote !== null) return `unknown lane "${item.laneNote}", shown under flex`
   return null
 }
 
@@ -149,7 +180,8 @@ export function signoffTiles(snap: OpsSnapshot): Tile[] {
 export function heartbeatOf(snap: OpsSnapshot): { color: string; text: string } {
   const hb = snap.sessions.find(x => x.name === snap.heartbeatName)
   if (hb === undefined) return { color: TONE.bad, text: 'heartbeat off' }
-  return { color: hb.status === 'busy' ? TONE.ok : TONE.info, text: `heartbeat ${hb.status ?? 'on'}` }
+  const acc = snap.heartbeatAccount === null || !snap.usage.some(u => u.account === 'agents') ? '' : ` · ${snap.accountLabels[snap.heartbeatAccount]}`
+  return { color: hb.status === 'busy' ? TONE.ok : TONE.info, text: `heartbeat ${hb.status ?? 'on'}${acc}` }
 }
 
 export function renderPanel(ui: PanelUi, state: PanelState, actions: PanelActions): RenderElement {
@@ -194,15 +226,38 @@ export function renderPanel(ui: PanelUi, state: PanelState, actions: PanelAction
   }
   const ago = (ms: number | null): string => (ms === null ? '?' : formatAge(snap.atMs - ms))
 
-  // 1. Agents: slot boxes, then one card per agent
+  // 1. Agents: one row per lane (or slot boxes without lanes), then one card per agent
+  const lanes = laneViews(snap.lanes, snap.agents, snap.backlog)
   const agents: Child[] = [heading('Agents', `${snap.agents.length} of ${snap.agentLimit} slots`)]
-  agents.push(
-    chips(
-      slotBoxes(snap.agents, snap.agentLimit).map(slot =>
-        slot.state === null ? chip('free', GREY_BG, GREY) : chip(truncate(slot.name ?? '?', 10), agentColor(slot.state)),
+  if (lanes.length === 0) {
+    agents.push(
+      chips(
+        slotBoxes(snap.agents, snap.agentLimit).map(slot =>
+          slot.state === null ? chip('free', GREY_BG, GREY) : chip(truncate(slot.name ?? '?', 10), agentColor(slot.state)),
+        ),
       ),
-    ),
-  )
+    )
+  }
+  for (const lane of lanes) {
+    const ready = readyTone(lane.ready, lane.minReady)
+    agents.push(
+      Box({
+        flexDirection: 'column',
+        children: [
+          chips([
+            Text({ bold: true, ...(lane.isOver ? { color: TONE.warn } : {}), children: [`${lane.label} ${lane.agents.length}/${lane.cap}`] }),
+            lane.isOver ? chip('over cap', TONE.warn) : null,
+            ...(lane.agents.length === 0 ? [chip('free', GREY_BG, GREY)] : lane.agents.map(a => chip(truncate(a.name, 10), agentColor(a.state)))),
+          ]),
+          chips([
+            lane.next === null ? Text({ dimColor: true, children: ['next: none'] }) : chip(`next ${lane.next.id}`, TONE.ok),
+            lane.next === null ? null : Text({ wrap: 'truncate-end', children: [truncate(lane.next.title, 30)] }),
+            chip(ready.text, ready.color),
+          ]),
+        ],
+      }),
+    )
+  }
   if (snap.agents.length === 0) agents.push(dim('No agent is working.'))
   for (const a of snap.agents) {
     const color = agentColor(a.state)
@@ -218,7 +273,10 @@ export function renderPanel(ui: PanelUi, state: PanelState, actions: PanelAction
             justifyContent: 'space-between',
             children: [
               Text({ bold: true, color, children: [`● ${truncate(a.name, 28)}${a.kind === 'bg' ? '  bg' : ''}`] }),
-              chip(a.model ?? 'model ?', modelColor(a.model)),
+              chips([
+                a.account === null ? null : chip(snap.accountLabels[a.account], GREY_BG, a.account === 'main' ? TONE.info : TONE.ok),
+                chip(a.model ?? 'model ?', modelColor(a.model)),
+              ]),
             ],
           }),
           a.task ? Text({ wrap: 'truncate-end', children: [a.task] }) : null,
@@ -232,6 +290,43 @@ export function renderPanel(ui: PanelUi, state: PanelState, actions: PanelAction
             ],
           }),
           a.worktrees.length === 0 && a.branch && a.kind !== 'bg' ? dim('no worktree found for its branch') : null,
+        ]),
+      }),
+    )
+  }
+
+  // 1b. Usage: one row per account, a gauge per plan window
+  const usage: Child[] = [heading('Usage')]
+  for (const u of snap.usage) {
+    const head = chips([Text({ bold: true, children: [u.label] }), u.plan === null ? null : Text({ dimColor: true, children: [u.plan] })])
+    if (u.windows.length === 0) {
+      usage.push(Box({ flexDirection: 'column', children: [head, dim(u.error ?? 'no reading yet')] }))
+      continue
+    }
+    usage.push(
+      Box({
+        flexDirection: 'column',
+        children: kids([
+          head,
+          ...u.windows.map(w => {
+            const g = usageGauge(w.percentUsed)
+            return Box({
+              flexDirection: 'column',
+              children: [
+                Box({
+                  flexDirection: 'row',
+                  columnGap: 1,
+                  children: [
+                    Text({ dimColor: u.isStale, children: [w.label.padEnd(8)] }),
+                    Text({ color: g.color, dimColor: u.isStale, children: ['━'.repeat(g.filled) + '╌'.repeat(g.total - g.filled)] }),
+                    Text({ bold: true, dimColor: u.isStale, children: [`${Math.round(w.percentUsed)}%`] }),
+                  ],
+                }),
+                Text({ dimColor: true, children: [`  ${resetText(w.resetsAtMs, snap.atMs)}`] }),
+              ],
+            })
+          }),
+          u.isStale ? dim(`reading ${u.readAtMs === null ? 'age unknown' : `${formatAge(snap.atMs - u.readAtMs)} old`} (stale)`) : dim(`read ${ago(u.readAtMs)} ago`),
         ]),
       }),
     )
@@ -264,7 +359,10 @@ export function renderPanel(ui: PanelUi, state: PanelState, actions: PanelAction
   if (bl === null) {
     backlog.push(heading('Backlog'), dim('No tmp/ops/backlog.json yet.'))
   } else {
-    backlog.push(heading('Backlog', `${bl.items.length} open · ${free} slot${free === 1 ? '' : 's'} free`))
+    const open = freeLanes(lanes).map(l => l.id)
+    backlog.push(
+      heading('Backlog', lanes.length === 0 ? `${bl.items.length} open · ${free} slot${free === 1 ? '' : 's'} free` : `${bl.items.length} open · free: ${open.length === 0 ? 'none' : open.join(', ')}`),
+    )
     backlog.push(
       chips(
         (['in_progress', 'review', 'ready', 'defined', 'inbox', 'blocked'] as const)
@@ -273,26 +371,40 @@ export function renderPanel(ui: PanelUi, state: PanelState, actions: PanelAction
       ),
     )
     if (bl.items.length === 0) backlog.push(dim('The backlog is empty.'))
-    for (const item of bl.items) {
-      const note = backlogNote(item)
-      const isMuted = item.status === 'blocked'
-      backlog.push(
-        Box({
-          flexDirection: 'column',
-          children: kids([
-            chips([
-              Text({ bold: true, dimColor: isMuted, children: [item.id] }),
-              chip(item.status.replace('_', ' '), backlogColor(item.status), isMuted ? GREY : CHIP_TEXT),
-              item.priority === null ? null : chip(`P${item.priority}`, TONE.warn),
-              item.isNext ? chip('next', TONE.ok) : null,
-              item.agent !== null && item.status === 'in_progress' ? Text({ color: TONE.ok, children: [truncate(item.agent, 14)] }) : null,
-              Text({ dimColor: true, children: [[item.track, item.size].filter(x => x !== null).join(' ')] }),
+    // With lanes the items group under their lane; without, one list.
+    const groups: { label: string | null; items: OpsBacklogItem[] }[] =
+      lanes.length === 0 ? [{ label: null, items: bl.items }] : lanes.filter(l => l.open > 0).map(l => ({ label: l.label, items: l.items }))
+    for (const group of groups) {
+      if (group.label !== null) {
+        backlog.push(
+          Box({
+            flexDirection: 'row',
+            marginTop: 1,
+            children: [Text({ bold: true, children: [group.label.toUpperCase()] }), Text({ dimColor: true, children: [`  ${group.items.length} open`] })],
+          }),
+        )
+      }
+      for (const item of group.items) {
+        const note = backlogNote(item)
+        const isMuted = item.status === 'blocked'
+        backlog.push(
+          Box({
+            flexDirection: 'column',
+            children: kids([
+              chips([
+                Text({ bold: true, dimColor: isMuted, children: [item.id] }),
+                chip(item.status.replace('_', ' '), backlogColor(item.status), isMuted ? GREY : CHIP_TEXT),
+                item.priority === null ? null : chip(`P${item.priority}`, TONE.warn),
+                item.isNext ? chip('next', TONE.ok) : null,
+                item.agent !== null && item.status === 'in_progress' ? Text({ color: TONE.ok, children: [truncate(item.agent, 14)] }) : null,
+                Text({ dimColor: true, children: [[item.track, item.size].filter(x => x !== null).join(' ')] }),
+              ]),
+              Text({ dimColor: isMuted, wrap: 'truncate-end', children: [truncate(item.title, 52)] }),
+              note === null ? null : Text({ color: item.status === 'blocked' ? GREY : TONE.warn, wrap: 'truncate-end', children: [truncate(note, 52)] }),
             ]),
-            Text({ dimColor: isMuted, wrap: 'truncate-end', children: [truncate(item.title, 52)] }),
-            note === null ? null : Text({ color: item.status === 'blocked' ? GREY : TONE.warn, wrap: 'truncate-end', children: [truncate(note, 52)] }),
-          ]),
-        }),
-      )
+          }),
+        )
+      }
     }
     if (bl.doneCount > 0) backlog.push(dim(`${bl.doneCount} done`))
   }
@@ -446,6 +558,7 @@ export function renderPanel(ui: PanelUi, state: PanelState, actions: PanelAction
       snap.priority ? Text({ color: TONE.warn, wrap: 'wrap', children: [snap.priority] }) : null,
       notice,
       Box({ flexDirection: 'column', children: kids(agents) }),
+      Box({ flexDirection: 'column', children: kids(usage) }),
       Box({ flexDirection: 'column', children: kids(locks) }),
       Box({ flexDirection: 'column', children: kids(backlog) }),
       Box({ flexDirection: 'column', children: kids(signoff) }),

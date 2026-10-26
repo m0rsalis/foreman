@@ -25,6 +25,10 @@ From its `config`, propose these and ask the user once (AskUserQuestion, recomme
 | Full check command | `--check` | detected (`make check`, `npm test`, `cargo test`, ...) |
 | Shared locks with minutes before a job is killed | `--locks check:120,sim:45` | `check:120` |
 | Agent name prefix | `--slug` | the folder name |
+| Second Claude account for background agents (their usage limit is then not the lead's; needs a one-time sign-in) | `--agents-account` / `--no-agents-account` | off |
+| Lanes: parallel areas with an agent cap and the paths each owns, as `id[:cap[:path+path]]`, comma separated; a lane named `flex` takes whatever fits no other | `--lanes core:2:src+docs,flex:1` | none |
+| Usage gauge in the panel and a status line that feeds it (per account) | `--usage` / `--no-usage` | off |
+| Main branch and whether to check it forced (`main_fullcheck.sh`) | `--main-branch`, `--main-check` / `--no-main-check` | detected, on |
 
 The lead's session name matters: background agents reach the lead only by it. In the terminal start the lead with `claude --name <lead>`; in the desktop app, rename the session to it.
 
@@ -38,7 +42,7 @@ Show the user the lines it printed. For each `kept` line (a file the user edited
 
 ## 3. Finish
 
-- Multi-step checks (several commands, different locks) go in `.claude/ops-kit.json` as `fullCheck`: `[{"part": "check", "lock": "check", "command": "make check"}, {"part": "e2e", "lock": "sim", "command": "make e2e"}]`. Other settings there: `previews` (folders whose newest files the panel lists), `action` (`{"label": "Deploy", "command": "...", "confirm": "..."}`, a button on the panel), `decisionLog` and `reviewNotesDir` (docs the panel scans for open questions), `stallMinutes`, `autoOpen`. Rerun the init after changing `owner`, `lead`, `slug`, `locks` or the check, so the CLAUDE.md section and agent files follow.
+- Multi-step checks (several commands, different locks) go in `.claude/ops-kit.json` as `fullCheck`: `[{"part": "check", "lock": "check", "command": "make check"}, {"part": "e2e", "lock": "sim", "command": "make e2e"}]`. A step skips itself when its inputs are unchanged if it has `"cache": {"exclude": ["docs"], "keep": [], "fingerprint": []}` (`exclude` paths that cannot change its result, `keep` paths inside them that can, `fingerprint` commands whose output is an input too); `checkCache` (`toolchain` paths, `machine` commands) applies to every cached step. Run `python3 <tools>/suite_cache.py lint` to check the paths exist. A step that prints `ops-kit: no-cache` is never recorded. Other settings there: `previews` (folders whose newest files the panel lists), `action` (`{"label": "Deploy", "command": "...", "confirm": "..."}`, a button on the panel), `decisionLog` and `reviewNotesDir` (docs the panel scans for open questions), `stallMinutes`, `autoOpen`. Rerun the init after changing `owner`, `lead`, `slug`, `locks` or the check, so the CLAUDE.md section and agent files follow.
 - Commit the tracked files on a branch (`.claude/ops-kit.json`, `.claude/ops-kit-files.json`, `.claude/agents/`, the tools folder, `CLAUDE.md`, `.gitignore`) if the user wants them shared; `tmp/` and `.claude/settings.local.json` stay local.
 - Offer to start the heartbeat with the command in `<tools>/heartbeat.md` (it needs the lead's session name to be right first).
 - Tell the user: `/ops` opens the panel; `/ops-kit:restore` is the lead's first step in a new session.
