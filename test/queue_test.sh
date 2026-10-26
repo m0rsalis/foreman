@@ -4,6 +4,8 @@
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
+# A forced main check's variables must not leak into these.
+unset FORCE_ALL FORCE_LINUX FULLCHECK_BRANCH
 repo=$(make_repo)
 python3 "$INIT" --repo "$repo" --owner Test --locks check:120,sim:45 >/dev/null || { echo "FAIL: init"; exit 1; }
 OPS_AGENT_LOCKS=$(mktemp -d)
@@ -119,5 +121,65 @@ w2=$!
 wait "$w1" "$w2"
 check "race: both jobs ran in turn" "$(tr '\n' ' ' < "$log")" "start end start end "
 check "race: lock freed" "$(lock_state)" free
+
+# --- A caller that cannot run never blocks the queue ---
+# A throwaway copy of the scripts (inside the repo, where ops_config finds its checkout) stands in for a worktree that gets removed.
+copy_scripts() { rm -rf "$1"; mkdir -p "$1"; cp "$repo"/tools/ops-kit/{queue.sh,queue_lock.py,queue_run.py,ops_config.py} "$1"/; }
+wait_gone() { for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do kill -0 "$1" 2>/dev/null || return 0; sleep 1; done; }
+Qd="$OPS_AGENT_LOCKS/locks/sim.queue"
+rm -rf "$LK" "$Qd"
+
+# A waiter whose script folder is deleted leaves, and the one behind it runs.
+X="$repo/tools/gone-worktree"; copy_scripts "$X"
+"$Q" sim sleep 9 >/dev/null 2>&1 &
+sleep 1
+"$X/queue.sh" sim echo never >"$OPS_AGENT_LOCKS/xout" 2>"$OPS_AGENT_LOCKS/xerr" &
+xp=$!
+sleep 1
+"$Q" sim echo behind >"$OPS_AGENT_LOCKS/yout" 2>/dev/null &
+yp=$!
+sleep 1
+rm -rf "$X"
+wait_gone "$xp"
+wait "$xp" 2>/dev/null; xc=$?
+check "gone worktree: waiter exits non-zero" "$([ "$xc" -ne 0 ] && echo yes || echo no)" yes
+# Under load the waiter behind may clear this one first (kill -9, no message).
+case "$(cat "$OPS_AGENT_LOCKS/xerr")" in *"my worktree $X is gone, leaving the queue"*) r=yes ;; *) if [ "$xc" -eq 137 ]; then r=yes; else r=no; fi ;; esac
+check "gone worktree: says so" "$r" yes
+check "gone worktree: never ran" "$(cat "$OPS_AGENT_LOCKS/xout")" ""
+# shellcheck disable=SC2010  # names are our own, plain ASCII
+check "gone worktree: ticket removed" "$(ls "$Qd" | grep -c -e "-$xp\$")" 0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do kill -0 "$yp" 2>/dev/null || break; sleep 1; done
+check "gone worktree: next caller ran" "$(cat "$OPS_AGENT_LOCKS/yout")" behind
+wait
+
+# An alive owner whose queue.sh path is gone, at the head of the queue, is cleared.
+mkdir -p "$Qd"
+sh -c 'sleep 60; :' /nonexistent/worktree/queue.sh & ghost=$!
+echo "$ghost" > "$Qd/1-$ghost"
+out=$("$Q" sim echo ran 2>"$OPS_AGENT_LOCKS/err")
+check "gone script owner: waiter proceeds" "$out" ran
+case "$(cat "$OPS_AGENT_LOCKS/err")" in *"cleared ticket of pid $ghost"*) r=yes ;; *) r=no ;; esac
+check "gone script owner: says so" "$r" yes
+check "gone script owner: process untouched" "$(kill -0 "$ghost" 2>/dev/null && echo alive || echo dead)" alive
+kill "$ghost" 2>/dev/null; wait "$ghost" 2>/dev/null
+
+# Tickets keep their format (<time_ns>-<pid>, content the bare pid) and an
+# older copy's ticket (an alive pid, no queue.sh path) is honoured.
+sleep 30 & old=$!
+echo "$old" > "$Qd/1-$old"
+"$Q" sim echo ran >"$OPS_AGENT_LOCKS/out" 2>/dev/null &
+wp=$!
+sleep 7
+check "old-format head ticket: honoured" "$(cat "$OPS_AGENT_LOCKS/out")" ""
+# shellcheck disable=SC2010  # names are our own, plain ASCII
+mine=$(ls "$Qd" | grep -v -e "^1-")
+case "$mine" in [0-9]*-$wp) r=yes ;; *) r="no ($mine)" ;; esac
+check "ticket name is <time_ns>-<pid>" "$r" yes
+check "ticket content is the bare pid" "$(cat "$Qd/$mine")" "$wp"
+kill "$old" 2>/dev/null; wait "$old" 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8; do kill -0 "$wp" 2>/dev/null || break; sleep 1; done
+check "old-format head ticket: waiter runs once it dies" "$(cat "$OPS_AGENT_LOCKS/out")" ran
+wait
 
 exit $fail

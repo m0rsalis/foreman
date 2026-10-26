@@ -48,6 +48,37 @@ export type OpsConfig = {
   refreshSeconds: number
   stallMinutes: number
   autoOpen: boolean
+  /** Agents run on a second Claude account (tools/ops-kit/claude-agents.sh); false when absent. */
+  agentsAccount: boolean
+  /** The claude executable that lists the main account's sessions; `claude` when absent. */
+  claude: string
+  /** Labels shown for the two accounts ("Main", "Agents" when absent; no emails here). */
+  accounts: { main: string | null; agents: string | null }
+  /** Lanes (`lanes` in the config, used when backlog.json has none); empty means one queue and no lane rows. */
+  lanes: OpsLaneDef[]
+}
+
+export type OpsAccount = 'main' | 'agents'
+
+/** One plan window of an account (tmp/ops/usage/<account>.json, written by statusline.py or usage_write.py). */
+export type OpsUsageWindow = {
+  id: string
+  label: string
+  /** 0 to 100. */
+  percentUsed: number
+  resetsAtMs: number | null
+}
+
+/** An account's usage reading, stale from 15 minutes after `readAtMs`. */
+export type OpsUsage = {
+  account: OpsAccount
+  label: string
+  plan: string | null
+  windows: OpsUsageWindow[]
+  readAtMs: number | null
+  isStale: boolean
+  /** Set (and windows empty) when there is no file or it did not parse. */
+  error: string | null
 }
 
 /** A piece of text that may point at a file (absolute path, checked to exist). */
@@ -74,6 +105,12 @@ export type OpsAgent = {
   /** The card's colour: running, stalled (quiet for the stall minutes) or stopped (its session is gone). */
   state: 'running' | 'stalled' | 'stopped'
   sessionName: string | null
+  /** The account it runs on: live from the account's agent list, else status.json's `account`; null when unknown. */
+  account: OpsAccount | null
+  /** Minutes the live session has been idle (registry `statusUpdatedAt`); null when busy or not live. */
+  idleMinutes: number | null
+  /** The lane id the agent works in (status.json `lane`, else its backlog item's lane, else flex); null without lanes. */
+  lane: string | null
 }
 
 /** A live Claude session read from ~/.claude/sessions/<pid>.json. */
@@ -84,6 +121,8 @@ export type OpsSession = {
   status: 'busy' | 'idle' | null
   updatedMs: number | null
   startedMs: number | null
+  /** When `status` last changed (registry `statusUpdatedAt`). */
+  statusSinceMs: number | null
   /** The session's working directory; null when the file has none. */
   cwd: string | null
 }
@@ -126,13 +165,36 @@ export type OpsBacklogItem = {
   blockedBy: string | null
   agent: string | null
   pr: string | null
-  /** The first ready item with every dependency done: what the lead would pick. */
+  /** The lane id the item belongs to (its `lane`; unknown or missing ones fall under flex); null without lanes. */
+  lane: string | null
+  /** The raw `lane` value when it names no known lane (the item then shows under flex); else null. */
+  laneNote: string | null
+  /** The first ready item (of its lane, with lanes) with every dependency done: what the lead would pick. */
   isNext: boolean
+}
+
+/** One lane: backlog.json `lanes` or the config's. `minReady` is how many ready briefs the lead keeps in it. */
+export type OpsLaneDef = { id: string; label: string; cap: number; owns: string | null; minReady: number }
+
+/** One lane as the panel shows it. */
+export type OpsLaneView = OpsLaneDef & {
+  agents: OpsAgent[]
+  /** More agents than `cap`. */
+  isOver: boolean
+  /** Open (not done) items of the lane, in pick order. */
+  items: OpsBacklogItem[]
+  open: number
+  /** Ready items with every dependency done: what the lane can pick from. */
+  ready: number
+  /** The lane's next item; null when none is ready and unblocked. */
+  next: { id: string; title: string } | null
 }
 
 export type OpsBacklog = {
   /** Items that are not done, in pick order. */
   items: OpsBacklogItem[]
+  /** The lanes in display order; empty when there are none. */
+  lanes: OpsLaneDef[]
   /** Count per status (every status, zero included), done too. */
   counts: Record<OpsBacklogStatus, number>
   doneCount: number
@@ -213,6 +275,14 @@ export type OpsSnapshot = {
   /** Live background sessions and the heartbeat session. */
   sessions: OpsSession[]
   heartbeatName: string
+  /** The account the heartbeat session runs on; null when unknown. */
+  heartbeatAccount: OpsAccount | null
+  /** The lanes in display order (backlog.json's, else the config's); empty when there are none. */
+  lanes: OpsLaneDef[]
+  /** Both accounts' plan usage, main first (the agents' account only when agents run on it). */
+  usage: OpsUsage[]
+  /** The two accounts' chip labels. */
+  accountLabels: Record<OpsAccount, string>
   prs: OpsPrs
   /** The configured action's label and confirm text; null when none is configured. */
   action: OpsActionSpec | null

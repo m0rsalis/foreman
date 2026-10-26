@@ -5,7 +5,8 @@
     ops_config.py locks-dir            the lock folder (OPS_AGENT_LOCKS wins)
     ops_config.py lock-timeout <name>  minutes; exit 2 when the lock is not declared
     ops_config.py lock-names           one declared lock per line
-    ops_config.py check-steps          one JSON object per full-check step: part, lock, command
+    ops_config.py check-steps          one JSON object per full-check step: part, lock, command, cache
+    ops_config.py check-cache          the global suite-cache settings as one JSON object
     ops_config.py get <key>            a top-level value (strings bare, others as JSON)
 
 The config is <main>/.claude/ops-kit.json (shared) with <main>/tmp/ops/config.json
@@ -63,14 +64,15 @@ def check_steps(config):
     steps = config.get("fullCheck")
     if isinstance(steps, list) and steps:
         return [
-            {"part": s.get("part") or f"step {i + 1}", "lock": s.get("lock"), "command": s["command"]}
+            {"part": s.get("part") or f"step{i + 1}", "lock": s.get("lock"), "command": s["command"],
+             "cache": s["cache"] if isinstance(s.get("cache"), dict) else None}
             for i, s in enumerate(steps) if isinstance(s, dict) and isinstance(s.get("command"), str)
         ]
     command = config.get("checkCommand")
     if not isinstance(command, str) or not command.strip():
         return []
     names = [lk["name"] for lk in locks(config)]
-    return [{"part": "check", "lock": "check" if "check" in names else None, "command": command}]
+    return [{"part": "check", "lock": "check" if "check" in names else None, "command": command, "cache": None}]
 
 
 def main():
@@ -97,6 +99,9 @@ def main():
     elif op == "check-steps":
         for step in check_steps(config):
             print(json.dumps(step))
+    elif op == "check-cache":
+        cache = config.get("checkCache")
+        print(json.dumps(cache if isinstance(cache, dict) else {}))
     elif op == "get":
         value = config.get(sys.argv[2])
         if value is None:

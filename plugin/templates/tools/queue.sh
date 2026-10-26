@@ -17,6 +17,12 @@
 # Time limit: a job that runs longer than QUEUE_TIMEOUT_MIN minutes (default:
 # the lock's timeoutMin; fractions allowed) is killed with its whole process
 # group, the lock is released, one line says so and the exit code is 124.
+# A caller whose worktree was deleted while it waited (queue_lock.py gone)
+# removes its ticket, says so and exits 1. Every caller also clears the ticket
+# of an alive owner whose queue.sh path (absolute, from its command line) no
+# longer exists: that owner cannot take the lock, so it must not block the
+# head. Tickets stay a bare pid in <time_ns>-<pid> files: copies of this
+# script in older worktrees read them with cat and kill -0.
 # Waiting callers print who holds the lock and for how long every 3 minutes.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -40,7 +46,8 @@ echo "$$" > "$ticket"
 # renamed aside before it is deleted.
 cleanup() {
   rm -f "${ticket:?}"
-  python3 -I "$here/queue_lock.py" release "$L" "$$"
+  [ -f "$here/queue_lock.py" ] && python3 -I "$here/queue_lock.py" release "$L" "$$"
+  return 0
 }
 child=""
 # A signal kills the job (it runs in the background so the trap fires at once).
@@ -52,11 +59,31 @@ trap cleanup EXIT
 trap onsignal INT TERM
 
 waited=0
+# The absolute path of the queue.sh a process runs, from its command line
+# (empty when it is not a queue.sh or the path is relative or has spaces).
+script_of() {
+  local w
+  for w in $(ps -o command= -p "$1" 2>/dev/null); do
+    case "$w" in /*queue.sh) echo "$w"; return ;; esac
+  done
+}
 while true; do
+  if [ ! -f "$here/queue_lock.py" ]; then
+    echo "queue.sh: $name: my worktree $here is gone, leaving the queue" >&2
+    exit 1
+  fi
   for t in "$Q"/*; do
     [ -f "$t" ] || continue
     p=$(cat "$t" 2>/dev/null)
-    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then rm -f "${t:?}"; fi
+    if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+      rm -f "${t:?}"
+    elif [ -n "$p" ] && [ "$p" != "$$" ] && [ "$p" != "$(cat "${L:?}/owner" 2>/dev/null)" ]; then
+      sp=$(script_of "$p")
+      if [ -n "$sp" ] && [ ! -f "$sp" ]; then
+        echo "queue.sh: cleared ticket of pid $p: its $sp is gone" >&2
+        rm -f "${t:?}"
+      fi
+    fi
   done
   python3 -I "$here/queue_lock.py" reap "$L" "$limit"
   o=$(cat "${L:?}/owner" 2>/dev/null)

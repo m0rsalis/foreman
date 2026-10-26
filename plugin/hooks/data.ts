@@ -10,6 +10,11 @@ import type {
   OpsBacklog,
   OpsBacklogItem,
   OpsBacklogStatus,
+  OpsLaneDef,
+  OpsLaneView,
+  OpsAccount,
+  OpsUsage,
+  OpsUsageWindow,
   OpsCheck,
   OpsCheckStrip,
   OpsConfig,
@@ -151,6 +156,10 @@ export function defaultConfig(): OpsConfig {
     refreshSeconds: DEFAULTS.refreshSeconds,
     stallMinutes: DEFAULTS.stallMinutes,
     autoOpen: true,
+    agentsAccount: false,
+    claude: 'claude',
+    accounts: { main: null, agents: null },
+    lanes: [],
   }
 }
 
@@ -204,6 +213,17 @@ function applyLayer(config: OpsConfig, raw: Record<string, unknown>): void {
   config.refreshSeconds = n('refreshSeconds', 1) ?? config.refreshSeconds
   config.stallMinutes = n('stallMinutes', 1) ?? config.stallMinutes
   if (typeof raw.autoOpen === 'boolean') config.autoOpen = raw.autoOpen
+  if (typeof raw.agentsAccount === 'boolean') config.agentsAccount = raw.agentsAccount
+  config.claude = s('claude') ?? config.claude
+  const accounts = raw.accounts
+  if (isRecord(accounts)) {
+    const label = (k: string): string | null => {
+      const a = accounts[k]
+      return isRecord(a) ? str(a.label) : null
+    }
+    config.accounts = { main: label('main'), agents: label('agents') }
+  }
+  if ('lanes' in raw) config.lanes = parseLanes(raw.lanes)
 }
 
 /**
@@ -253,6 +273,10 @@ export type RawAgent = {
   kind: 'bg' | 'inproc'
   /** The background session's name (its name in the sessions folder). */
   sessionName: string | null
+  /** 'main' or 'agents': the fallback when the live account lists do not name the session. */
+  account: OpsAccount | null
+  /** status.json `lane`; null when the agent has none (its backlog item then decides). */
+  lane: string | null
 }
 
 export type RawSignoff = { item: string; kind: string; where: string | null; since: string | null }
@@ -283,6 +307,8 @@ export function parseStatus(text: string): StatusFile {
     model: str(a.model),
     kind: a.kind === 'bg' ? ('bg' as const) : ('inproc' as const),
     sessionName: str(a.sessionName),
+    account: a.account === 'main' || a.account === 'agents' ? (a.account as OpsAccount) : null,
+    lane: str(a.lane),
   }))
   const signoff = list(raw.signoff).map(s => ({
     item: str(s.item) ?? '?',
@@ -318,21 +344,84 @@ function backlogStatus(v: unknown): OpsBacklogStatus {
   return BACKLOG_STATUSES.find(s => s === key) ?? 'inbox'
 }
 
+/** A lane keeps this many ready briefs unless it says otherwise; the lane called flex keeps none. */
+export const MIN_READY = 2
+
+/** `lanes` as a list of {id, label, cap, owns, minReady}; empty when it is not a usable list. */
+export function parseLanes(raw: unknown): OpsLaneDef[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(isRecord).flatMap((l): OpsLaneDef[] => {
+    const id = str(l.id)
+    if (id === null) return []
+    const owns = Array.isArray(l.owns) ? l.owns.map(str).filter((p): p is string => p !== null).join(', ') : str(l.owns)
+    return [{
+      id,
+      label: str(l.label) ?? id,
+      cap: typeof l.cap === 'number' ? l.cap : 1,
+      owns: owns === '' ? null : owns,
+      minReady: typeof l.minReady === 'number' ? l.minReady : id === 'flex' ? 0 : MIN_READY,
+    }]
+  })
+}
+
+/** The lane that takes what names no known lane: flex, else the last one. */
+function fallbackLane(lanes: OpsLaneDef[]): string | null {
+  const lane = lanes.find(l => l.id === 'flex') ?? lanes[lanes.length - 1]
+  return lane === undefined ? null : lane.id
+}
+
+/** The lane an agent works in: its own `lane` when known, else its in-progress backlog item's lane, else flex. Null without lanes. */
+export function agentLane(agent: { name: string; lane: string | null }, backlog: OpsBacklog | null, lanes: OpsLaneDef[]): string | null {
+  const fallback = fallbackLane(lanes)
+  if (fallback === null) return null
+  if (agent.lane !== null) return lanes.some(l => l.id === agent.lane) ? agent.lane : fallback
+  const item = backlog?.items.find(i => i.agent === agent.name && i.status === 'in_progress')
+  return item?.lane ?? fallback
+}
+
+/** The panel's lanes in display order. An agent or item of a lane that is not listed counts under the fallback lane. */
+export function laneViews(lanes: OpsLaneDef[], agents: OpsAgent[], backlog: OpsBacklog | null): OpsLaneView[] {
+  const fallback = fallbackLane(lanes)
+  const idOf = (id: string | null): string | null => (id !== null && lanes.some(l => l.id === id) ? id : fallback)
+  return lanes.map(l => {
+    const mine = agents.filter(a => idOf(a.lane) === l.id)
+    const items = (backlog?.items ?? []).filter(i => idOf(i.lane) === l.id)
+    const next = items.find(i => i.isNext)
+    return {
+      ...l,
+      agents: mine,
+      isOver: mine.length > l.cap,
+      items,
+      open: items.length,
+      ready: items.filter(i => i.status === 'ready' && i.waitsFor.length === 0 && i.blockedBy === null).length,
+      next: next === undefined ? null : { id: next.id, title: next.title },
+    }
+  })
+}
+
 /**
  * tmp/ops/backlog.json (schema 1): items ordered by the owner's priority (set
  * ones first, ascending) then the lead's rank; done items only counted. An item
  * waits for the dependencies that are not done (an unknown id counts as not
- * done); the next item is the first ready one that waits for nothing.
+ * done); each lane's next item (with lanes; else the one overall) is its first
+ * ready one that waits for nothing. Lanes are the file's `lanes`, else
+ * `configLanes`; an item's lane is its `lane`, an unknown or missing one falls
+ * under flex (the raw unknown value stays in `laneNote`).
  */
-export function parseBacklog(text: string): OpsBacklog {
+export function parseBacklog(text: string, configLanes: OpsLaneDef[] = []): OpsBacklog {
   const raw: unknown = JSON.parse(text)
   if (!isRecord(raw)) throw new Error('backlog.json is not an object')
   if (!Array.isArray(raw.items)) throw new Error('backlog.json has no items list')
+  const own = parseLanes(raw.lanes)
+  const lanes = own.length > 0 ? own : configLanes
+  const fallback = fallbackLane(lanes)
   const counts = Object.fromEntries(BACKLOG_STATUSES.map(s => [s, 0])) as Record<OpsBacklogStatus, number>
   type Row = Omit<OpsBacklogItem, 'waitsFor' | 'isNext'>
   const rows: Row[] = raw.items.filter(isRecord).map((r, i) => {
     const status = backlogStatus(r.status)
     counts[status] += 1
+    const wanted = str(r.lane)
+    const isKnown = wanted !== null && lanes.some(l => l.id === wanted)
     return {
       id: str(r.id) ?? '?',
       title: str(r.title) ?? '?',
@@ -346,6 +435,8 @@ export function parseBacklog(text: string): OpsBacklog {
       blockedBy: str(r.blockedBy),
       agent: str(r.agent),
       pr: str(r.pr),
+      lane: isKnown ? wanted : fallback,
+      laneNote: wanted === null || isKnown || fallback === null ? null : wanted,
     }
   })
   const done = new Set(rows.filter(r => r.status === 'done').map(r => r.id))
@@ -357,9 +448,11 @@ export function parseBacklog(text: string): OpsBacklog {
       return pa === pb ? a.rank - b.rank : pa < pb ? -1 : 1
     })
     .map((r): OpsBacklogItem => ({ ...r, waitsFor: r.dependsOn.filter(d => !done.has(d)), isNext: false }))
-  const next = open.find(r => r.status === 'ready' && r.waitsFor.length === 0)
-  if (next !== undefined) next.isNext = true
-  return { items: open, counts, doneCount: counts.done }
+  for (const lane of lanes.length === 0 ? [null] : lanes.map(l => l.id)) {
+    const next = open.find(r => r.lane === lane && r.status === 'ready' && r.waitsFor.length === 0)
+    if (next !== undefined) next.isNext = true
+  }
+  return { items: open, lanes, counts, doneCount: counts.done }
 }
 
 // --- sign-off ---------------------------------------------------------------
@@ -524,7 +617,54 @@ export function parseSession(text: string): OpsSession | null {
   const kind = raw.kind === 'bg' || raw.kind === 'background' ? 'bg' : raw.kind === 'interactive' ? 'interactive' : 'other'
   const status = raw.status === 'busy' || raw.status === 'idle' ? raw.status : null
   const updated = typeof raw.updatedAt === 'number' ? raw.updatedAt : typeof raw.startedAt === 'number' ? raw.startedAt : null
-  return { name, pid, kind, status, updatedMs: updated, startedMs: typeof raw.startedAt === 'number' ? raw.startedAt : null, cwd: str(raw.cwd) }
+  const since = typeof raw.statusUpdatedAt === 'number' ? raw.statusUpdatedAt : null
+  return {
+    name,
+    pid,
+    kind,
+    status,
+    updatedMs: updated,
+    startedMs: typeof raw.startedAt === 'number' ? raw.startedAt : null,
+    statusSinceMs: since,
+    cwd: str(raw.cwd),
+  }
+}
+
+/** A reading older than this is dimmed in the panel. */
+export const USAGE_STALE_MS = 15 * 60_000
+
+export const ACCOUNT_LABELS: Record<OpsAccount, string> = { main: 'Main', agents: 'Agents' }
+
+/** tmp/ops/usage/<account>.json (schema 1; see tools/ops-kit/usage_write.py). Throws on text that is not a reading. */
+export function parseUsage(text: string, account: OpsAccount, label: string, nowMs: number): OpsUsage {
+  const raw: unknown = JSON.parse(text)
+  if (!isRecord(raw)) throw new Error('not an object')
+  const windows: OpsUsageWindow[] = []
+  for (const w of Array.isArray(raw.windows) ? raw.windows : []) {
+    if (!isRecord(w) || typeof w.percentUsed !== 'number') continue
+    windows.push({
+      id: str(w.id) ?? str(w.label) ?? '?',
+      label: str(w.label) ?? str(w.id) ?? '?',
+      percentUsed: Math.max(0, Math.min(100, w.percentUsed)),
+      resetsAtMs: typeof w.resetsAt === 'number' ? w.resetsAt : parseTimeMs(w.resetsAt),
+    })
+  }
+  if (windows.length === 0) throw new Error('no window with a percentUsed')
+  const readAtMs = typeof raw.readAt === 'number' ? raw.readAt : parseTimeMs(raw.updatedAt)
+  return { account, label, plan: str(raw.plan), windows, readAtMs, isStale: readAtMs === null || nowMs - readAtMs >= USAGE_STALE_MS, error: null }
+}
+
+/** `claude agents --json --all`: names of background sessions (those with a state; interactive ones show in both accounts' lists). */
+export function parseAgentNames(text: string): string[] {
+  const raw: unknown = JSON.parse(text)
+  if (!Array.isArray(raw)) return []
+  const names: string[] = []
+  for (const a of raw) {
+    if (!isRecord(a) || typeof a.state !== 'string') continue
+    const n = str(a.name) ?? str(a.id)
+    if (n !== null) names.push(n)
+  }
+  return names
 }
 
 /** `gh pr list --json number,title,state,headRefName,mergedAt,url`. */
@@ -701,6 +841,8 @@ export type Cache = {
   previews: OpsPreviewGroup[]
   paths: Record<string, boolean>
   cwdByPid: Record<string, string | null>
+  /** Which account lists each background session (slow reader). */
+  accountByName: Record<string, OpsAccount>
 }
 
 export function newCache(): Cache {
@@ -714,6 +856,7 @@ export function newCache(): Cache {
     previews: [],
     paths: {},
     cwdByPid: {},
+    accountByName: {},
   }
 }
 
@@ -745,6 +888,10 @@ export function emptySnapshot(nowMs: number, repo: string | null, config: OpsCon
     checkStrips: [],
     sessions: [],
     heartbeatName: config.heartbeatName,
+    heartbeatAccount: null,
+    lanes: config.lanes,
+    usage: [],
+    accountLabels: { main: config.accounts.main ?? ACCOUNT_LABELS.main, agents: config.accounts.agents ?? ACCOUNT_LABELS.agents },
     prs: { open: [], mergedToday: [], error: null },
     action: config.action,
     actionRun: IDLE_ACTION,
@@ -785,12 +932,46 @@ export async function collect(io: Io, ctx: CollectContext, cache: Cache): Promis
   await guard('backlog.json', async () => {
     const path = `${repo}/tmp/ops/backlog.json`
     if (!(await io.exists(path))) return
-    snap.backlog = parseBacklog(await io.read(path))
+    snap.backlog = parseBacklog(await io.read(path), config.lanes)
+    if (snap.backlog.lanes.length > 0) snap.lanes = snap.backlog.lanes
   })
 
   if (isSlow) {
     await guard('worktrees', async () => {
       cache.worktrees = parseWorktrees(await runOk(io, [BIN.git, '-C', repo, 'worktree', 'list', '--porcelain'], repo))
+    })
+  }
+
+  // Plan usage per account (written by statusline.py and usage_write.py): the agents' account only when agents run on it.
+  for (const acc of config.agentsAccount ? (['main', 'agents'] as const) : (['main'] as const)) {
+    const label = snap.accountLabels[acc]
+    const path = `${repo}/tmp/ops/usage/${acc}.json`
+    try {
+      snap.usage.push(parseUsage(await io.read(path), acc, label, nowMs))
+    } catch (err) {
+      const missing = !(await io.exists(path).catch(() => false))
+      snap.usage.push({ account: acc, label, plan: null, windows: [], readAtMs: null, isStale: true, error: missing ? 'no reading yet' : `unreadable: ${errText(err)}` })
+    }
+  }
+
+  // Which account runs each background session: each account's service lists only its own.
+  if (isSlow && config.agentsAccount) {
+    await guard('accounts', async () => {
+      const lists: [OpsAccount, string[]][] = [
+        ['main', [config.claude, 'agents', '--json', '--all']],
+        ['agents', [`${repo}/${config.toolsDir}/claude-agents.sh`, 'agents', '--json', '--all']],
+      ]
+      const found: Record<string, OpsAccount> = {}
+      for (const [acc, argv] of lists) {
+        const r = await io.run(argv, repo, 20_000).catch(() => null)
+        if (r === null || r.exitCode !== 0) continue
+        try {
+          for (const n of parseAgentNames(r.stdout)) found[n] = acc
+        } catch {
+          // not JSON: this account's list stays empty
+        }
+      }
+      cache.accountByName = found
     })
   }
 
@@ -814,6 +995,7 @@ export async function collect(io: Io, ctx: CollectContext, cache: Cache): Promis
   const named = new Set(st?.agents.map(a => a.sessionName ?? a.name) ?? [])
   const isHere = (x: OpsSession): boolean => x.cwd === null || x.cwd === repo || x.cwd.startsWith(`${repo}/`)
   snap.sessions = sessions.filter(x => (x.kind === 'bg' && (isHere(x) || named.has(x.name))) || (x.name === config.heartbeatName && isHere(x)))
+  snap.heartbeatAccount = cache.accountByName[config.heartbeatName] ?? null
 
   if (st !== null) {
     snap.priority = st.priority
@@ -838,6 +1020,9 @@ export async function collect(io: Io, ctx: CollectContext, cache: Cache): Promis
       const live = a.kind === 'bg' ? sessions.find(x => x.kind === 'bg' && x.name === (a.sessionName ?? a.name)) : undefined
       const agent: OpsAgent = {
         ...a,
+        lane: agentLane(a, snap.backlog, snap.lanes),
+        account: cache.accountByName[a.sessionName ?? a.name] ?? a.account,
+        idleMinutes: live !== undefined && live.status === 'idle' && live.statusSinceMs !== null ? Math.max(0, Math.floor((nowMs - live.statusSinceMs) / 60_000)) : null,
         worktrees: trees,
         quietMinutes,
         isStalled,

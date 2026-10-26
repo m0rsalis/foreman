@@ -3,18 +3,22 @@
 
     ops_init.py [--repo PATH] [--owner NAME] [--lead NAME] [--slug SLUG]
                 [--project NAME] [--cap N] [--check CMD] [--locks check:120,db:30]
+                [--lanes core:1:src/core+docs,ui:2,flex:1] [--agents-account | --no-agents-account]
+                [--main-branch NAME] [--no-main-check] [--usage] [--compact-window TOKENS]
                 [--tools-dir DIR] [--force PATH ...] [--dry-run] [--json]
 
 Writes, in the checkout that holds PATH (default: the current directory):
   .claude/ops-kit.json             the settings (created once; flags given update their keys)
   .claude/agents/<slug>-*.md       three agent tiers: engineer (Opus), implementer (Sonnet), checker (Haiku)
-  <tools-dir>/...                  queue, full check, action runner, lead status, heartbeat
+  <tools-dir>/...                  queue, full check and its cache, main check, action runner, lead status,
+                                   heartbeat filter, quiet runner, second-account wrapper, usage tools
   CLAUDE.md                        the rules, between ops-kit markers
   .claude/ops-kit-files.json       what the init wrote last (so a rerun knows what you edited)
 and in the main checkout (where every worktree's agents meet):
   tmp/ops/                         status.json, backlog.json, lead-notes.md, briefs/, reports/ (only when missing)
   .gitignore                       tmp/ops/ and tmp/agent-locks/, unless already ignored
   .claude/settings.local.json      the permission entries background agents need (added, never removed)
+  .claude/settings.json            autoCompactWindow and, with --usage, the status line (only keys that are missing)
 
 Idempotent: a second run with the same inputs changes nothing. A file the
 init wrote and nobody changed is updated when the kit's version of it
@@ -37,10 +41,15 @@ MANIFEST = ".claude/ops-kit-files.json"
 BEGIN = "<!-- ops-kit:begin (managed by /ops-kit:init; edit freely, a rerun keeps your edits) -->"
 END = "<!-- ops-kit:end -->"
 BLOCK_KEY = "CLAUDE.md#ops-kit"
-TOOLS = ["queue.sh", "queue_lock.py", "queue_run.py", "fullcheck.sh", "run_action.sh", "lead_status.py", "ops_config.py", "README.md", "heartbeat.md"]
+TOOLS = [
+    "queue.sh", "queue_lock.py", "queue_run.py", "fullcheck.sh", "steps_json.sh", "suite_cache.py", "main_fullcheck.sh",
+    "run_action.sh", "lead_status.py", "needs_lead.py", "ops_config.py", "quiet.sh", "claude-agents.sh",
+    "statusline.py", "usage_write.py", "usage_show.py", "README.md", "heartbeat.md",
+]
 TIERS = ["engineer", "implementer", "checker"]
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 LOCK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+COMPACT_WINDOW = 300000
 
 
 def git(cwd, *args):
@@ -100,6 +109,31 @@ def parse_locks(text):
         if lock["timeoutMin"] == int(lock["timeoutMin"]):
             lock["timeoutMin"] = int(lock["timeoutMin"])
     return out
+
+
+def parse_lanes(text):
+    """core:1:src/core+docs,ui:2,flex -> [{id, label, cap, owns}]; the cap defaults to 1, the paths to none."""
+    out = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, rest = part.partition(":")
+        cap, _, owns = rest.partition(":")
+        if not LOCK.match(name):
+            raise SystemExit(f"ops_init: bad lane id {name!r}")
+        if cap and not cap.isdigit():
+            raise SystemExit(f"ops_init: lane {name}: the cap must be a whole number, got {cap!r}")
+        out.append({"id": name, "label": name[:1].upper() + name[1:], "cap": int(cap) if cap else 1,
+                    "owns": [o for o in owns.split("+") if o]})
+    if len({lane["id"] for lane in out}) != len(out):
+        raise SystemExit("ops_init: a lane id is listed twice")
+    return out
+
+
+def main_branch(top):
+    ref = git(top, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    return ref.split("/", 1)[1] if ref and "/" in ref else "main"
 
 
 class Run:
@@ -214,6 +248,10 @@ def render(text, values, is_json=False):
     return re.sub(r"\{\{([A-Z_]+)\}\}", sub, text)
 
 
+def rule(name, values):
+    return render(template(f"rules/{name}.md"), values).rstrip("\n")
+
+
 def template(rel):
     with open(os.path.join(TEMPLATES, rel), encoding="utf-8") as f:
         return f.read()
@@ -228,6 +266,17 @@ def check_text(config):
     if config.get("checkCommand"):
         return f"`{config['checkCommand']}`"
     return "not configured yet: set `checkCommand` in `.claude/ops-kit.json`"
+
+
+def lanes_text(config):
+    lanes = [lane for lane in config.get("lanes") or [] if isinstance(lane, dict) and lane.get("id")]
+    if not lanes:
+        return "No lanes are configured: one queue, the agent cap above is the only limit."
+    out = []
+    for lane in lanes:
+        owns = ", ".join(f"`{o}`" for o in lane.get("owns") or [])
+        out.append(f"`{lane['id']}` (cap {lane.get('cap', 1)}{'; owns ' + owns if owns else ''})")
+    return "Lanes: " + ", ".join(out) + "."
 
 
 def permissions(tools):
@@ -252,7 +301,13 @@ def permissions(tools):
         "Bash(gh pr list:*)",
         f"Bash({tools}/queue.sh:*)",
         f"Bash({tools}/fullcheck.sh:*)",
+        f"Bash({tools}/claude-agents.sh:*)",
+        f"Bash({tools}/quiet.sh:*)",
+        f"Bash({tools}/main_fullcheck.sh:*)",
         f"Bash(python3 {tools}/lead_status.py:*)",
+        f"Bash(python3 {tools}/needs_lead.py:*)",
+        f"Bash(python3 {tools}/usage_write.py:*)",
+        f"Bash(python3 {tools}/usage_show.py:*)",
     ]
 
 
@@ -266,6 +321,12 @@ def main(argv=None):
     p.add_argument("--cap", type=int)
     p.add_argument("--check")
     p.add_argument("--locks")
+    p.add_argument("--lanes")
+    p.add_argument("--agents-account", action=argparse.BooleanOptionalAction)
+    p.add_argument("--main-branch")
+    p.add_argument("--main-check", action=argparse.BooleanOptionalAction)
+    p.add_argument("--usage", action=argparse.BooleanOptionalAction)
+    p.add_argument("--compact-window", type=int)
     p.add_argument("--tools-dir")
     p.add_argument("--force", action="append", default=[])
     p.add_argument("--dry-run", action="store_true")
@@ -300,6 +361,13 @@ def main(argv=None):
         "locks": [{"name": "check", "timeoutMin": 120}],
         "checkCommand": detect_check(top),
         "heartbeatName": f"{slug}-heartbeat",
+        "agentsAccount": False,
+        "claude": "claude",
+        "lanes": [],
+        "mainBranch": main_branch(top),
+        "mainCheck": True,
+        "usage": False,
+        "autoCompactWindow": COMPACT_WINDOW,
         "previews": ["tmp/previews"],
         "action": None,
         "decisionLog": None,
@@ -312,6 +380,9 @@ def main(argv=None):
         "owner": a.owner, "lead": a.lead, "slug": a.slug, "project": a.project, "agentCap": a.cap,
         "checkCommand": a.check, "toolsDir": a.tools_dir.rstrip("/") if a.tools_dir else None,
         "locks": parse_locks(a.locks) if a.locks else None,
+        "lanes": parse_lanes(a.lanes) if a.lanes is not None else None,
+        "agentsAccount": a.agents_account, "mainBranch": a.main_branch, "mainCheck": a.main_check,
+        "usage": a.usage, "autoCompactWindow": a.compact_window,
     }
     for key, value in flags.items():
         if value is not None:
@@ -342,8 +413,25 @@ def main(argv=None):
         "CHECK": check_text(config),
         "LOCKS": ", ".join(f"`{lk.get('name')}`" for lk in lock_list) or "none",
         "CAP": int(config["agentCap"]),
+        "CLAUDE": f"{tools}/claude-agents.sh" if config.get("agentsAccount") else str(config.get("claude") or "claude"),
+        "HEARTBEAT_ACCOUNT": " on the agents' account, so the main account's usage limit cannot stop the check-ins" if config.get("agentsAccount") else "",
+        "LANES": lanes_text(config),
         "NOW": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+
+    window = int(config.get("autoCompactWindow") or 0)
+    has_check = bool(config.get("fullCheck") or config.get("checkCommand"))
+    values["MAINBRANCH"] = config["mainBranch"]
+    values["COMPACT"] = f"{window // 1000}k tokens" if window > 0 else "off in this repo: the default window applies"
+    values["ACCOUNTS_RULE"] = rule("accounts", values) if config.get("agentsAccount") else ""
+    values["LANES_RULE"] = rule("lanes", values) if lanes_text(config).startswith("Lanes:") else rule("tracks", values)
+    values["USAGE_RULE"] = rule("usage", values) if config.get("usage") else ""
+    values["MAINCHECK"] = (
+        f"`{tools}/main_fullcheck.sh` is the safety net: a forced check of `origin/{config['mainBranch']}` in its own detached worktree "
+        "(`.claude/worktrees/main-check`) whose greens seed the cache; the heartbeat starts it when the branch moved and the queue is empty, "
+        "and the lead runs it before a release."
+        if config.get("mainCheck", True) and has_check else ""
+    )
 
     # 2. Files the init owns until someone edits them.
     for tier in TIERS:
@@ -354,7 +442,11 @@ def main(argv=None):
         if name.endswith(".md"):
             text = render(text, values)
         run.managed(f"{tools}/{name}", text, mode)
-    run.claude_md(render(template("claude-section.md"), values))
+    section = template("claude-section.md")
+    for key in ("ACCOUNTS_RULE", "USAGE_RULE"):
+        if not values[key]:
+            section = section.replace("{{%s}}\n" % key, "")
+    run.claude_md(re.sub(r"[ \t]+\n", "\n", render(section, values)))
 
     # 3. The lead's state, in the main checkout: only when missing.
     run.once(main_root, "tmp/ops/status.json", render(template("state/status.json"), values, is_json=True))
@@ -364,15 +456,17 @@ def main(argv=None):
     run.folder(main_root, "tmp/ops/reports")
 
     # 4. .gitignore: the state and the locks stay out of git.
-    probes = (("/tmp/ops/", "tmp/ops/status.json"), ("/tmp/agent-locks/", "tmp/agent-locks/x"),
-              ("/.claude/settings.local.json", ".claude/settings.local.json"))
+    # tmp/logs holds quiet.sh and main_fullcheck.sh logs; an untracked file there would make the main
+    # checkout dirty and turn the suite cache off.
+    probes = (("/tmp/ops/", "tmp/ops/status.json"), ("/tmp/agent-locks/", "tmp/agent-locks/x"), ("/tmp/logs/", "tmp/logs/x"),
+              ("/.claude/settings.local.json", ".claude/settings.local.json"), ("/.claude/worktrees/", ".claude/worktrees/x/y"))
     wanted = [line for line, probe in probes
               if subprocess.run(["git", "-C", top, "check-ignore", "-q", "--no-index", probe], check=False).returncode != 0]
     ignore_path = os.path.join(top, ".gitignore")
     if wanted:
         current = read(ignore_path) or ""
         sep = "" if current == "" or current.endswith("\n") else "\n"
-        run.write(ignore_path, current + sep + "# ops kit: the lead's state and the queue locks\n" + "\n".join(wanted) + "\n")
+        run.write(ignore_path, current + sep + "# ops kit: the lead's state, the queue locks and the agents' worktrees\n" + "\n".join(wanted) + "\n")
         run.note("updated" if current else "created", ".gitignore", ", ".join(wanted))
     else:
         run.note("unchanged", ".gitignore")
@@ -398,6 +492,38 @@ def main(argv=None):
             run.note("updated" if existed else "created", settings_rel, f"{len(missing)} permission entries added")
         else:
             run.note("unchanged", settings_rel)
+
+    # 5b. Project settings every session reads: the compaction window and, with usage on, the status line.
+    # Only keys that are missing are added; a value someone set stays.
+    project_rel = ".claude/settings.json"
+    project_path = os.path.join(top, project_rel)
+    try:
+        project = load_json(project_path)
+    except ValueError:
+        project = False
+    if project is False or (project is not None and not isinstance(project, dict)):
+        run.note("kept", project_rel, "not valid JSON; add autoCompactWindow and statusLine by hand (README)")
+    else:
+        project = project or {}
+        added = []
+        window = int(config.get("autoCompactWindow") or 0)
+        if window > 0 and "autoCompactWindow" not in project:
+            project["autoCompactWindow"] = window
+            added.append("autoCompactWindow")
+        if window > 0 and not isinstance(project.get("env"), dict):
+            project["env"] = {}
+        if window > 0 and isinstance(project.get("env"), dict) and "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in project["env"]:
+            project["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(window)
+            added.append("env.CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+        if config.get("usage") and "statusLine" not in project:
+            project["statusLine"] = {"type": "command", "command": f'python3 "$CLAUDE_PROJECT_DIR"/{tools}/statusline.py'}
+            added.append("statusLine")
+        if added:
+            existed = os.path.exists(project_path)
+            run.write(project_path, dump_json(project))
+            run.note("updated" if existed else "created", project_rel, ", ".join(added))
+        else:
+            run.note("unchanged", project_rel)
 
     # 6. The record of what the init wrote, for the next run.
     manifest = {"kit": "ops-kit", "files": dict(sorted(run.new_recorded.items()))}

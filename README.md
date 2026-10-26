@@ -13,7 +13,11 @@ It came out of a long project run this way (about twenty merged PRs a day with u
 | **Lead routines** (skills) | `/ops-kit:restore`, `/ops-kit:checkpoint`, `/ops-kit:check-in`, `/ops-kit:brief`, `/ops-kit:start-agent`, `/ops-kit:revive`, `/ops-kit:merge`. The lead follows them without being told. |
 | **Queue** (`tools/ops-kit/queue.sh <lock> <cmd>`) | FIFO locks shared by every session and worktree for anything there is one of (a test database, a simulator, the full check). Time limits that kill the whole job, stale locks that clear themselves, no overlap even when two waiters race. |
 | **Full check** (`tools/ops-kit/fullcheck.sh`) | Your check command(s) through the queue, one final `FULLCHECK:` line, a history line for the panel. Agents merge only on green. |
-| **Heartbeat** | A tiny Haiku background session that messages the lead every 30 minutes, so agents stopped by a usage limit are revived and free slots are filled while you are away. |
+| **Heartbeat** | A tiny Haiku background session that runs `needs_lead.py` every 30 minutes and messages the lead only when something needs it (an agent finished, stalled or stopped, a free slot with a ready brief, a red main check, a lane short of briefs), so agents stopped by a usage limit are revived and free slots are filled while you are away. |
+| **Suite cache** | A `fullCheck` step with a `cache` entry is skipped when its inputs did not change since a green run, so a docs-only PR does not rerun the test suite. `main_fullcheck.sh` checks `origin/main` forced, in its own worktree. |
+| **Lanes** (optional) | Parallel areas with their own agent cap and owned paths; the panel and `lead_status.py` show each against its cap and warn when too few briefs are ready. |
+| **Second account and usage** (optional) | Background agents on a second Claude account (`claude-agents.sh`) so their usage limit is not the lead's; a status line records each account's limits and the panel shows them as gauges. |
+| **`quiet.sh`** | Runs a long command with its output in a log and prints only the failing lines and the tail. |
 
 ### Why it works
 
@@ -52,7 +56,7 @@ Then start a new session in the repo (or `/reload-plugins` in an open one) and r
 /ops-kit:init
 ```
 
-It asks once for the owner's name, the lead session's name, the agent cap, the full-check command and the shared locks (with defaults it detects), writes the files, and tells you what it did. Then:
+It asks once for the owner's name, the lead session's name, the agent cap, the full-check command and the shared locks (with defaults it detects), and whether you want a second account for agents, lanes (with the paths each owns), the usage gauge and a forced check of main, writes the files, and tells you what it did. Then:
 
 1. **Name the lead session** what you told the init (terminal: `claude --name <lead>`; desktop: rename the session). Agents reach the lead only by that name.
 2. **Start the heartbeat** with the command in `tools/ops-kit/heartbeat.md` (the init offers to).
@@ -66,11 +70,12 @@ It asks once for the owner's name, the lead session's name, the agent cap, the f
 |---|---|---|
 | `.claude/ops-kit.json` | Settings (below) | Only the keys you pass as flags change |
 | `.claude/agents/<slug>-engineer.md`, `-implementer.md`, `-checker.md` | Opus, Sonnet, Haiku agent definitions | Updated if untouched, kept if you edited them |
-| `tools/ops-kit/` | `queue.sh`, `queue_lock.py`, `queue_run.py`, `fullcheck.sh`, `run_action.sh`, `lead_status.py`, `ops_config.py`, `heartbeat.md`, `README.md` | Same |
+| `tools/ops-kit/` | `queue.sh`, `queue_lock.py`, `queue_run.py`, `fullcheck.sh`, `suite_cache.py`, `steps_json.sh`, `main_fullcheck.sh`, `run_action.sh`, `lead_status.py`, `needs_lead.py`, `quiet.sh`, `claude-agents.sh`, `statusline.py`, `usage_write.py`, `usage_show.py`, `ops_config.py`, `heartbeat.md`, `README.md` | Same |
 | `CLAUDE.md` | The rules, between `<!-- ops-kit:begin -->` and `<!-- ops-kit:end -->`; the rest of the file is yours | The section: same |
 | `.claude/ops-kit-files.json` | What the init wrote last (how it knows what you edited) | Kept in step |
 | `tmp/ops/` (main checkout) | `status.json`, `backlog.json`, `lead-notes.md`, `briefs/`, `reports/` | Never rewritten |
-| `.gitignore` | `/tmp/ops/`, `/tmp/agent-locks/`, `/.claude/settings.local.json` unless already ignored | Added once |
+| `.gitignore` | `/tmp/ops/`, `/tmp/agent-locks/`, `/tmp/logs/`, `/.claude/settings.local.json`, `/.claude/worktrees/` unless already ignored | Added once |
+| `.claude/settings.json` | Only keys that are missing: `autoCompactWindow`, `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW`, and with `--usage` the `statusLine` | Missing keys added; yours kept |
 | `.claude/settings.local.json` (main checkout) | Permission entries: `claude --bg`, `claude agents/logs/stop/rm`, `SendMessage`, git fetch/pull/push/switch/checkout/branch/merge/worktree, `gh pr create/merge/view/list`, the queue, check and status scripts | Missing entries added; nothing removed; hooks untouched |
 
 A file you edited is never overwritten: the kit's new version goes to `tmp/ops/init-pending/<path>` and the init says so; the skill shows you the diff and asks. `--force <path>` takes the kit's version.
@@ -100,6 +105,12 @@ Shared (commit it). `tmp/ops/config.json`, if present, overrides any key on this
 | `reviewNotesDir` | none | A folder with `review-notes-YYYY-MM-DD.md`; open items after the latest answers show as reviews waiting |
 | `signoffKinds` | `decision, review, test, concept, action` | The panel's tiles; other kinds count under the last |
 | `stallMinutes`, `refreshSeconds`, `autoOpen`, `gh` | 20, 5, true, `gh` | Panel behaviour |
+| `fullCheck[].cache` | none (step always runs) | `{"exclude": [paths], "keep": [paths], "fingerprint": [commands]}`: paths whose changes cannot change the step's result, paths inside them that can, commands whose output is an input too |
+| `checkCache` | none | `{"toolchain": [paths], "machine": [commands]}` added to every cached step's inputs (the tools folder, this config and `.gitignore` are always included) |
+| `mainBranch`, `mainCheck` | detected from `origin/HEAD`, true | The branch the forced main check runs on; whether `needs_lead.py` watches it |
+| `lanes` | none | `[{"id", "label", "cap", "owns": [paths], "minReady"}]`; `lanes` in `tmp/ops/backlog.json` wins. `minReady` defaults to 2 (0 for `flex`) |
+| `agentsAccount`, `claude`, `accounts` | false, `claude`, none | Background agents on a second account (`tools/ops-kit/claude-agents.sh`); the `claude` command to use |
+| `usage`, `autoCompactWindow` | false, 300000 | The usage gauges and their status line; the auto-compact window written to `.claude/settings.json` |
 
 Rerun `/ops-kit:init` after changing `owner`, `lead`, `slug`, `locks` or the check, so the CLAUDE.md section and the agent files follow.
 
@@ -118,6 +129,10 @@ The repo is private. To give someone the kit:
 
 - **Repo access:** add them as a collaborator (`gh api -X PUT repos/m0rsalis/claude-ops-kit/collaborators/<their-github-name> -f permission=pull`, or GitHub's Settings, Collaborators). They then follow Install above.
 - **Or a copy:** they can add a local folder as the marketplace: `claude plugin marketplace add /path/to/claude-ops-kit --scope local`.
+
+## Upgrading from the 2026-10-15 kit
+
+Update the plugin (below), then run `/ops-kit:init` in the repo. Files the old init wrote and you did not edit are updated (`fullcheck.sh`, `queue.sh`, `lead_status.py`, `ops_config.py`, `heartbeat.md`, the agent tiers, the CLAUDE.md section); the new tools (`needs_lead.py`, `quiet.sh`, `suite_cache.py`, `steps_json.sh`, `main_fullcheck.sh`) are created; files you edited are kept and the new version waits in `tmp/ops/init-pending/` (`--force <path>` takes it). Nothing in `tmp/ops/` is rewritten. New settings default off (`agentsAccount`, `lanes`, `usage`) except the forced main check, which `needs_lead.py` uses; add them with the init's flags. A multi-step `fullCheck` keeps running every step until you add a `cache` entry to the steps whose inputs you can name. The heartbeat now runs `needs_lead.py`: start a new one from `tools/ops-kit/heartbeat.md` and stop the old one.
 
 ## Update
 

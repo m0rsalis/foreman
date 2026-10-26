@@ -1,6 +1,6 @@
 {
   "name": "ops-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A lead session with background agents: backlog, shared locks, model per difficulty, the Ops panel, and the setup and routines as skills",
   "author": { "name": "Filip Koňařík" },
   "types": "./types/index.d.ts"
