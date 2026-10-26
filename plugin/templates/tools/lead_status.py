@@ -8,7 +8,7 @@ PRs. Read-only. Run from anywhere inside the repo:
 
     python3 <tools>/lead_status.py
 
-Lanes (optional): `lanes` in backlog.json (else in .claude/ops-kit.json) is a
+Lanes (optional): `lanes` in backlog.json (else in .claude/foreman.json) is a
 list of {id, label, cap, minReady, owns}. A lane owns paths, so two agents in
 different lanes rarely touch the same file; `cap` is its agents at once;
 `minReady` (default 2, 0 for a lane called flex) is how many ready briefs the
@@ -50,7 +50,7 @@ def load_json(path, default):
 
 def load_config(root):
     config = {}
-    for rel in (".claude/ops-kit.json", "tmp/ops/config.json"):
+    for rel in (".claude/foreman.json", "tmp/ops/config.json"):
         layer = load_json(os.path.join(root, rel), {})
         if isinstance(layer, dict):
             config.update(layer)
@@ -257,10 +257,10 @@ def main():
     config = load_config(root)
     owner = config.get("owner") or "the owner"
     heartbeat = config.get("heartbeatName") or "ops-heartbeat"
-    tools = config.get("toolsDir") or "tools/ops-kit"
+    tools = config.get("toolsDir") or "tools/foreman"
     status = load_json(os.path.join(root, "tmp", "ops", "status.json"), None)
     if not isinstance(status, dict):
-        sys.exit(f"lead_status: cannot read {root}/tmp/ops/status.json (run /ops-kit:init)")
+        sys.exit(f"lead_status: cannot read {root}/tmp/ops/status.json (run /foreman:init)")
 
     worktrees = {}
     current = None

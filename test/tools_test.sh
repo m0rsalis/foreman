@@ -7,7 +7,7 @@ repo=$(make_repo)
 bin=$(mktemp -d)
 trap 'rm -rf "$repo" "$bin"' EXIT
 python3 "$INIT" --repo "$repo" --owner Sam --slug demo >/dev/null || { echo "FAIL: init"; exit 1; }
-T="$repo/tools/ops-kit"
+T="$repo/tools/foreman"
 
 # lead_status.py: a fake `claude agents` with sessions of this repo, another repo, and unnamed ones.
 cat >"$bin/claude" <<EOF

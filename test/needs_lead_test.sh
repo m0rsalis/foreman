@@ -18,7 +18,7 @@ export NEEDS_LEAD_AGENTS=$t/agents.json NEEDS_LEAD_AGENTS2=$t/agents2.json NEEDS
 # run notifies").
 mkdir "$t/usage" "$t/sessions"
 : >"$t/ps.txt"
-N="python3 $repo/tools/ops-kit/needs_lead.py"
+N="python3 $repo/tools/foreman/needs_lead.py"
 # Overrides lib.sh's exact check: the expectation is a glob pattern here.
 # shellcheck disable=SC2254  # the expected value is a glob on purpose
 check() { case "$2" in $3) echo "ok: $1" ;; *) echo "FAIL: $1 (got '$2', want '$3')"; fail=1 ;; esac; }

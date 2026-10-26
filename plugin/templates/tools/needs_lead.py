@@ -10,7 +10,7 @@ only on NOTIFY.
 Why: a check-in costs the lead one turn at its full context (about 1.40 USD
 of list-price usage at 400k tokens), and most check-ins find nothing to do.
 
-With agentsAccount set (.claude/ops-kit.json) agents run on a second account
+With agentsAccount set (.claude/foreman.json) agents run on a second account
 (claude-agents.sh): each account's background service lists only its own
 sessions, so both lists are read.
 
@@ -43,7 +43,7 @@ tests: NEEDS_LEAD_AGENTS, NEEDS_LEAD_AGENTS2 and NEEDS_LEAD_PRS (JSON files
 instead of `claude agents --json --all` on the main and the agents' account
 and `gh pr list`), NEEDS_LEAD_BACKLOG, NEEDS_LEAD_STATE, NEEDS_LEAD_NOW
 (epoch seconds), NEEDS_LEAD_CONFIG (a config JSON file instead of
-.claude/ops-kit.json), NEEDS_LEAD_SESSIONS (a registry folder), NEEDS_LEAD_PS (a file
+.claude/foreman.json), NEEDS_LEAD_SESSIONS (a registry folder), NEEDS_LEAD_PS (a file
 with `ps -A -o pid=,ppid=,etime=,command=` output; setting either skips the
 pid-alive check).
 """

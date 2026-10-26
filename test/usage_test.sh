@@ -9,7 +9,7 @@ repo=$(make_repo)
 t=$(mktemp -d)
 trap 'rm -rf "$repo" "$t"' EXIT
 python3 "$INIT" --repo "$repo" --owner Sam --slug demo >/dev/null || { echo "FAIL: init"; exit 1; }
-T="$repo/tools/ops-kit"
+T="$repo/tools/foreman"
 export OPS_DIR=$t
 S="python3 $T/statusline.py"
 W="python3 $T/usage_write.py"
@@ -59,7 +59,7 @@ unset OPS_DIR
 git -C "$repo" add -A >/dev/null 2>&1
 git -C "$repo" commit -q -m tools
 git -C "$repo" worktree add -q "$repo/.claude/worktrees/w1" -b w1
-echo "$in" | CLAUDE_CONFIG_DIR=$HOME/.claude-agents python3 "$repo/.claude/worktrees/w1/tools/ops-kit/statusline.py" >/dev/null
+echo "$in" | CLAUDE_CONFIG_DIR=$HOME/.claude-agents python3 "$repo/.claude/worktrees/w1/tools/foreman/statusline.py" >/dev/null
 check "a worktree writes into the main checkout" "$(field "$repo/tmp/ops/usage/agents.json" "d['account']")" "agents"
 check "nothing written inside the worktree" "$(ls "$repo/.claude/worktrees/w1/tmp" 2>/dev/null | wc -l | tr -d ' ')" "0"
 exit $fail

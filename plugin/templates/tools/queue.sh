@@ -1,7 +1,7 @@
 #!/bin/bash
 # Shared-resource queue for parallel agents (and people) on one machine.
 #   queue.sh <lock> <command...>     run the command holding the named lock
-# The locks are declared in .claude/ops-kit.json ("locks": name and timeoutMin),
+# The locks are declared in .claude/foreman.json ("locks": name and timeoutMin),
 # for example `check` for the full check or a database, `sim` for a simulator.
 # First come, first served: each caller takes a ticket (a nanosecond
 # timestamp) and runs when its ticket is the oldest and the lock is free.

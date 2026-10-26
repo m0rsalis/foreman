@@ -71,7 +71,7 @@ export const DEFAULTS = {
 } as const
 
 /** The shared config, relative to the main checkout. */
-export const PROJECT_CONFIG = '.claude/ops-kit.json'
+export const PROJECT_CONFIG = '.claude/foreman.json'
 /** This machine's overrides, relative to the main checkout. */
 export const LOCAL_CONFIG = 'tmp/ops/config.json'
 
@@ -143,7 +143,7 @@ export function defaultConfig(): OpsConfig {
   return {
     owner: 'the owner',
     agentCap: DEFAULTS.agentCap,
-    toolsDir: 'tools/ops-kit',
+    toolsDir: 'tools/foreman',
     locksDir: 'tmp/agent-locks',
     locks: [{ name: 'check', timeoutMin: 120 }],
     previews: ['tmp/previews'],
@@ -635,7 +635,7 @@ export const USAGE_STALE_MS = 15 * 60_000
 
 export const ACCOUNT_LABELS: Record<OpsAccount, string> = { main: 'Main', agents: 'Agents' }
 
-/** tmp/ops/usage/<account>.json (schema 1; see tools/ops-kit/usage_write.py). Throws on text that is not a reading. */
+/** tmp/ops/usage/<account>.json (schema 1; see tools/foreman/usage_write.py). Throws on text that is not a reading. */
 export function parseUsage(text: string, account: OpsAccount, label: string, nowMs: number): OpsUsage {
   const raw: unknown = JSON.parse(text)
   if (!isRecord(raw)) throw new Error('not an object')

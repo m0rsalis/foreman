@@ -1,6 +1,6 @@
 #!/bin/bash
 # The full check through the shared queues, from the root of the checkout or
-# worktree it runs in. The steps come from .claude/ops-kit.json: `fullCheck`
+# worktree it runs in. The steps come from .claude/foreman.json: `fullCheck`
 # (a list of {part, lock, command, cache}; lock null runs without the queue)
 # or, when absent, `checkCommand` under the `check` lock. Prints exactly one
 # final line:
@@ -18,7 +18,7 @@
 # object and already passed on the same inputs prints "STEP <part> cached" and
 # is skipped, without joining its queue. FORCE_ALL=1 runs every step and
 # still records the greens. The cache lives in <main>/tmp/ops/suite-cache/
-# (SUITE_CACHE_DIR overrides). A step that prints a line "ops-kit: no-cache"
+# (SUITE_CACHE_DIR overrides). A step that prints a line "foreman: no-cache"
 # was gated off (it ran nothing real) and is not recorded.
 #
 # Each run also appends one JSON line to <main>/tmp/ops/checks.jsonl for the
@@ -60,7 +60,7 @@ record() { # result, part (a JSON string or null)
 }
 steps=$(python3 -I "$here/ops_config.py" check-steps) || exit 2
 if [ -z "$steps" ]; then
-  echo "FULLCHECK: no check configured FAILED (set checkCommand or fullCheck in .claude/ops-kit.json)"
+  echo "FULLCHECK: no check configured FAILED (set checkCommand or fullCheck in .claude/foreman.json)"
   record failed '"config"'
   exit 1
 fi
@@ -102,7 +102,7 @@ while IFS= read -r step; do
   # Record only if HEAD did not move and the tree is still clean: then the
   # fingerprint is exactly what the step saw.
   if [ -n "$fp" ] && [ "$(git rev-parse HEAD 2>/dev/null)" = "$START_HEAD" ] &&
-    python3 -I "$SC" usable 2>/dev/null && ! grep -q '^ops-kit: no-cache' "$LOG"; then
+    python3 -I "$SC" usable 2>/dev/null && ! grep -q '^foreman: no-cache' "$LOG"; then
     python3 -I "$SC" record "$fp" "$part" "$d" 2>/dev/null || true
   fi
 done <<<"$steps"

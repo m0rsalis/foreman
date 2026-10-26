@@ -11,7 +11,7 @@ python3 "$INIT" --repo "$repo" --owner Test --locks check:120,sim:45 >/dev/null 
 OPS_AGENT_LOCKS=$(mktemp -d)
 export OPS_AGENT_LOCKS
 trap 'rm -rf "$repo" "$OPS_AGENT_LOCKS"' EXIT
-Q="$repo/tools/ops-kit/queue.sh"
+Q="$repo/tools/foreman/queue.sh"
 lock_state() { if [ -d "$OPS_AGENT_LOCKS/locks/sim.lock" ]; then echo held; else echo free; fi; }
 alive() { if kill -0 "$(cat "$1")" 2>/dev/null; then echo alive; else echo dead; fi; }
 
@@ -124,7 +124,7 @@ check "race: lock freed" "$(lock_state)" free
 
 # --- A caller that cannot run never blocks the queue ---
 # A throwaway copy of the scripts (inside the repo, where ops_config finds its checkout) stands in for a worktree that gets removed.
-copy_scripts() { rm -rf "$1"; mkdir -p "$1"; cp "$repo"/tools/ops-kit/{queue.sh,queue_lock.py,queue_run.py,ops_config.py} "$1"/; }
+copy_scripts() { rm -rf "$1"; mkdir -p "$1"; cp "$repo"/tools/foreman/{queue.sh,queue_lock.py,queue_run.py,ops_config.py} "$1"/; }
 wait_gone() { for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do kill -0 "$1" 2>/dev/null || return 0; sleep 1; done; }
 Qd="$OPS_AGENT_LOCKS/locks/sim.queue"
 rm -rf "$LK" "$Qd"

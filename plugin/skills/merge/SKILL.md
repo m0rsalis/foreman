@@ -1,6 +1,6 @@
 ---
 name: merge
-description: Merge an agent's PR in the right order and clean up after it (stop and remove the session, remove the worktree, delete merged branches) in a repo using the ops kit. Use when an agent reports a PR ready or merged, when two PRs are close, or the user says merge or clean up.
+description: Merge an agent's PR in the right order and clean up after it (stop and remove the session, remove the worktree, delete merged branches) in a repo using Foreman. Use when an agent reports a PR ready or merged, when two PRs are close, or the user says merge or clean up.
 ---
 
 # Merge and clean up
@@ -19,4 +19,4 @@ description: Merge an agent's PR in the right order and clean up after it (stop 
    - `git worktree prune`, `git branch -d <branch>` and `git branch -d worktree-<task>` (the branch `-w` created), `git fetch --prune`.
    - Worktrees can hold gigabytes of dependencies and caches each; a dozen left behind fill a disk.
 3. Never push to a branch after its PR merged; start a new branch from main.
-4. Remove the agent from status.json; the slot is free: start the next item (`/ops-kit:start-agent`). Checkpoint.
+4. Remove the agent from status.json; the slot is free: start the next item (`/foreman:start-agent`). Checkpoint.

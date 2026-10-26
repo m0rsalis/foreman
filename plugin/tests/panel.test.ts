@@ -25,7 +25,7 @@ const PROJECT = {
 }
 
 const BASE_FILES: Record<string, string> = {
-  '/r/.claude/ops-kit.json': JSON.stringify(PROJECT),
+  '/r/.claude/foreman.json': JSON.stringify(PROJECT),
   '/r/tmp/ops/status.json': JSON.stringify(STATUS),
   '/r/tmp/ops/backlog.json': JSON.stringify({ schema: 1, items: [{ id: 'B-1', title: 'Export', status: 'ready', rank: 1 }] }),
   '/r/docs/decisions.md': '## Decision log\n\n| # | Date | Decision | Status |\n|---|---|---|---|\n| 12 | 2026-10 | Ops panel | Proposed |\n',
@@ -79,7 +79,7 @@ function worldWithClock(on: On, files: Record<string, string>, cwd: string, env:
     return { value: { ...answer(e.argv), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('ui.panes', () => ({ value: [{ id: 'ops-kit', title: 'Ops', isShown: true, isFocused: false, isPlaced: true }] }))
+  on('ui.panes', () => ({ value: [{ id: 'foreman', title: 'Ops', isShown: true, isFocused: false, isPlaced: true }] }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.log', () => ({ value: undefined }))
   return { runs, clock }
@@ -99,7 +99,7 @@ test('/ops opens the pane and it draws every section on desktop and terminal', a
   world(on, BASE_FILES)
   await $.command.run(OPS)
   for (const surface of SURFACES) {
-    const ui = await $.ui.mount({ plugin: 'ops-kit', surface, component: 'Pane', requestId: 'ops-kit', props: PANE })
+    const ui = await $.ui.mount({ plugin: 'foreman', surface, component: 'Pane', requestId: 'foreman', props: PANE })
     for (const heading of ['AGENTS', 'LOCKS', 'BACKLOG', 'WAITING FOR SAM', 'CHECKS AND PRS', 'DEPLOY STAGING', 'PREVIEWS']) {
       expect(await ui.find({ type: 'Text', text: heading })).toBeDefined()
     }
@@ -116,13 +116,13 @@ test('/ops opens the pane and it draws every section on desktop and terminal', a
 test('the action asks first, then starts the runner detached with the configured command', async ($, on) => {
   const runs = world(on, BASE_FILES)
   await $.command.run(OPS)
-  const ui = await $.ui.mount({ plugin: 'ops-kit', surface: 'desktop', component: 'Pane', requestId: 'ops-kit', props: PANE })
+  const ui = await $.ui.mount({ plugin: 'foreman', surface: 'desktop', component: 'Pane', requestId: 'foreman', props: PANE })
   await ui.press({ key: 'action' })
   expect(await ui.find({ key: 'action-confirm' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Deploy main to staging\?/ })).toBeDefined()
   expect(runs.some(argv => argv.includes('--detach'))).toBe(false)
   await ui.press({ key: 'action-confirm' })
-  expect(runs.filter(argv => argv.includes('--detach'))).toEqual([['/bin/bash', '/r/tools/ops-kit/run_action.sh', '--detach', 'make deploy']])
+  expect(runs.filter(argv => argv.includes('--detach'))).toEqual([['/bin/bash', '/r/tools/foreman/run_action.sh', '--detach', 'make deploy']])
   expect(await ui.find({ type: 'Text', text: /Started/ })).toBeDefined()
   expect(await ui.find({ key: 'action-confirm' })).toBeUndefined()
 })
@@ -130,7 +130,7 @@ test('the action asks first, then starts the runner detached with the configured
 test('Cancel runs nothing', async ($, on) => {
   const runs = world(on, BASE_FILES)
   await $.command.run(OPS)
-  const ui = await $.ui.mount({ plugin: 'ops-kit', surface: 'terminal', component: 'Pane', requestId: 'ops-kit', props: PANE })
+  const ui = await $.ui.mount({ plugin: 'foreman', surface: 'terminal', component: 'Pane', requestId: 'foreman', props: PANE })
   await ui.press({ key: 'action' })
   await ui.press({ key: 'action-cancel' })
   expect(await ui.find({ key: 'action' })).toBeDefined()
@@ -138,10 +138,10 @@ test('Cancel runs nothing', async ($, on) => {
 })
 
 test('an action without a confirm runs at the first press', async ($, on) => {
-  const files = { ...BASE_FILES, '/r/.claude/ops-kit.json': JSON.stringify({ ...PROJECT, action: { label: 'Report', command: 'make report' } }) }
+  const files = { ...BASE_FILES, '/r/.claude/foreman.json': JSON.stringify({ ...PROJECT, action: { label: 'Report', command: 'make report' } }) }
   const runs = world(on, files)
   await $.command.run(OPS)
-  const ui = await $.ui.mount({ plugin: 'ops-kit', surface: 'desktop', component: 'Pane', requestId: 'ops-kit', props: PANE })
+  const ui = await $.ui.mount({ plugin: 'foreman', surface: 'desktop', component: 'Pane', requestId: 'foreman', props: PANE })
   await ui.press({ key: 'action' })
   expect(runs.filter(argv => argv.includes('--detach')).length).toBe(1)
 })
@@ -149,16 +149,16 @@ test('an action without a confirm runs at the first press', async ($, on) => {
 test('a repo that is not set up says how to set it up', async ($, on) => {
   world(on, {}, '/r')
   await $.command.run(OPS)
-  const ui = await $.ui.mount({ plugin: 'ops-kit', surface: 'desktop', component: 'Pane', requestId: 'ops-kit', props: PANE })
-  expect(await ui.find({ type: 'Text', text: /run \/ops-kit:init/ })).toBeDefined()
+  const ui = await $.ui.mount({ plugin: 'foreman', surface: 'desktop', component: 'Pane', requestId: 'foreman', props: PANE })
+  expect(await ui.find({ type: 'Text', text: /run \/foreman:init/ })).toBeDefined()
 })
 
 test('the timer picks up a setup done after the session started', async ($, on) => {
   const files: Record<string, string> = {}
   const { clock } = worldWithClock(on, files, '/r')
   await $.session.start({ cwd: '/r', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ plugin: 'ops-kit', surface: 'desktop', component: 'Pane', requestId: 'ops-kit', props: PANE })
-  expect(await ui.find({ type: 'Text', text: /run \/ops-kit:init/ })).toBeDefined()
+  const ui = await $.ui.mount({ plugin: 'foreman', surface: 'desktop', component: 'Pane', requestId: 'foreman', props: PANE })
+  expect(await ui.find({ type: 'Text', text: /run \/foreman:init/ })).toBeDefined()
   Object.assign(files, BASE_FILES)
   await clock.advance(5_000)
   expect(await ui.find({ type: 'Text', text: 'AGENTS' })).toBeDefined()
@@ -168,7 +168,7 @@ test('the locks are read from OPS_AGENT_LOCKS when it is set', async ($, on) => 
   const files = { ...BASE_FILES, '/l/locks/check.lock/owner': '4711\n', '/r/tmp/agent-locks/locks/check.lock/owner': '4712\n' }
   world(on, files, '/r', { OPS_AGENT_LOCKS: '/l' })
   await $.command.run(OPS)
-  const ui = await $.ui.mount({ plugin: 'ops-kit', surface: 'desktop', component: 'Pane', requestId: 'ops-kit', props: PANE })
+  const ui = await $.ui.mount({ plugin: 'foreman', surface: 'desktop', component: 'Pane', requestId: 'foreman', props: PANE })
   expect(await ui.find({ type: 'Text', text: / pid 4711 / })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: / pid 4712 / })).toBeUndefined()
 })
@@ -176,7 +176,7 @@ test('the locks are read from OPS_AGENT_LOCKS when it is set', async ($, on) => 
 test('agent cards show the model badge and the heartbeat sits in the header', async ($, on) => {
   const files = {
     ...BASE_FILES,
-    '/r/.claude/ops-kit.json': JSON.stringify({ ...PROJECT, heartbeatName: 'demo-heartbeat' }),
+    '/r/.claude/foreman.json': JSON.stringify({ ...PROJECT, heartbeatName: 'demo-heartbeat' }),
     '/r/tmp/ops/status.json': JSON.stringify({
       ...STATUS,
       agents: [{ ...STATUS.agents[0], model: 'sonnet' }, { name: 'bg1', model: 'opus', kind: 'bg', sessionName: 'bg1', task: 't', branch: '', step: 's', startedAt: '2026-10-07T19:00:00Z' }],
@@ -187,7 +187,7 @@ test('agent cards show the model badge and the heartbeat sits in the header', as
   world(on, files, '/r', { HOME: '/h' })
   await $.command.run(OPS)
   for (const surface of SURFACES) {
-    const ui = await $.ui.mount({ plugin: 'ops-kit', surface, component: 'Pane', requestId: 'ops-kit', props: PANE })
+    const ui = await $.ui.mount({ plugin: 'foreman', surface, component: 'Pane', requestId: 'foreman', props: PANE })
     expect(await ui.find({ type: 'Text', text: / sonnet / })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: / opus / })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /heartbeat idle/ })).toBeDefined()
