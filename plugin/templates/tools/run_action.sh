@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs the Ops panel's action (the `action` in .claude/ops-kit.json: a
+# Runs the Ops panel's action (the `action` in .claude/foreman.json: a
 # deploy, a release build, a report) and keeps its state for the panel.
 #   run_action.sh [--detach] <command>
 # The command runs with /bin/bash -c in the main checkout, its output in

@@ -1,14 +1,14 @@
 ---
 name: start-agent
-description: Start a background agent for a ready backlog item in a repo using the ops kit, with the exact claude --bg command, and record it. Use when a slot is free and an item is ready, or the user says start, launch or spin up an agent.
+description: Start a background agent for a ready backlog item in a repo using Foreman, with the exact claude --bg command, and record it. Use when a slot is free and an item is ready, or the user says start, launch or spin up an agent.
 ---
 
 # Start an agent
 
 1. **Slot:** agents in `tmp/ops/status.json` < `agentLimit`. If full, do not start; say which item is next.
 2. **Pick:** with lanes, the lane must be under its cap, then the first ready item of a free lane (`lead_status.py` shows `lanes:`); the first ready item in pick order (`lead_status.py` marks it NEXT): the owner's priority, then rank, dependencies done, not blocked. When unsure between two, ask the owner with a recommendation.
-3. **Brief:** `tmp/ops/briefs/<task>.md` exists and is self-contained (`/ops-kit:brief`).
-4. **Start it from the main checkout** (settings from `.claude/ops-kit.json`: `slug`, `lead`, `heartbeatName`). With `agentsAccount` set, replace `claude` by `<toolsDir>/claude-agents.sh` in this command and in every `claude agents/stop/rm/--resume` call: agents run on the second account so their usage limit is not the lead's.
+3. **Brief:** `tmp/ops/briefs/<task>.md` exists and is self-contained (`/foreman:brief`).
+4. **Start it from the main checkout** (settings from `.claude/foreman.json`: `slug`, `lead`, `heartbeatName`). With `agentsAccount` set, replace `claude` by `<toolsDir>/claude-agents.sh` in this command and in every `claude agents/stop/rm/--resume` call: agents run on the second account so their usage limit is not the lead's.
 
 ```bash
 claude --bg -w <task> --agent <slug>-<tier> --permission-mode auto --name <task> "Your brief is <main checkout>/tmp/ops/briefs/<task>.md: read it first and follow it. tmp/ paths mean the main checkout's tmp/ (<main checkout>/tmp). Work only in your worktree. Report to the lead's session '<lead>' by SendMessage only: one line per merge, a hand-back line before stopping on a usage limit, then the final report. If the lead is unreachable, send it to '<heartbeatName>' and carry on. Run long commands in the background. No sub-agents."

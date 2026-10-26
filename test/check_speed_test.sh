@@ -23,7 +23,7 @@ echo a >"$repo/tracked.txt"
 
 # Three cached steps and one that always runs; each appends its part to $FA_MADE.
 setup_config() {
-  python3 - "$repo/.claude/ops-kit.json" <<'EOF'
+  python3 - "$repo/.claude/foreman.json" <<'EOF'
 import json, sys
 p = sys.argv[1]
 c = json.load(open(p))
@@ -42,7 +42,7 @@ setup_config
 gitc add -A
 gitc commit -qm "kit and fixtures"
 export FA_MADE="$fa/made" OPS_CHECKS_LOG="$fa/checks.jsonl" OPS_STEPS_LOG="$fa/steps.jsonl" SUITE_CACHE_DIR="$fa/cache" OPS_AGENT_LOCKS="$fa/locks"
-FC="$repo/tools/ops-kit/fullcheck.sh"
+FC="$repo/tools/foreman/fullcheck.sh"
 fc() { (cd "$repo" && "$FC" >"$fa/out" 2>&1); code=$?; tail -1 "$fa/out"; return $code; }
 made() { if [ -f "$FA_MADE" ]; then tr '\n' ' ' <"$FA_MADE"; fi; }
 sha() { gitc rev-parse --short HEAD; }
@@ -62,7 +62,7 @@ check "checks.jsonl has commit, clean and cached" "$(tail -1 "$fa/checks.jsonl" 
 check "steps.jsonl lists the cached steps" "$(tail -1 "$fa/steps.jsonl" | grep -c '"cached":\["lint","unit"\]')" 1
 
 # A cached step joins no queue: with the check lock held, a fully cached run still finishes.
-"$repo/tools/ops-kit/queue.sh" check sleep 25 >/dev/null 2>&1 &
+"$repo/tools/foreman/queue.sh" check sleep 25 >/dev/null 2>&1 &
 holder=$!
 sleep 2
 (cd "$repo" && "$FC" >"$fa/held" 2>&1) &
@@ -94,7 +94,7 @@ check "a source change reruns every cached step" "$out $(made)" "FULLCHECK: all 
 
 # The toolchain (the tools folder) is an input of every step, whatever the exclusions say.
 rm -f "$FA_MADE"
-echo "# edited" >>"$repo/tools/ops-kit/README.md"; commit toolchain
+echo "# edited" >>"$repo/tools/foreman/README.md"; commit toolchain
 out=$(fc)
 check "a tools change reruns every step" "$out $(made)" "FULLCHECK: all green at $(sha) (0 of 3 steps cached) lint unit act "
 out=$(fc)
@@ -119,7 +119,7 @@ out=$(fc)
 check "after FORCE_ALL the steps are cached" "$out" "FULLCHECK: all green at $(sha) (2 of 3 steps cached)"
 
 # A failing step is reported by its part and never cached.
-python3 - "$repo/.claude/ops-kit.json" <<'EOF'
+python3 - "$repo/.claude/foreman.json" <<'EOF'
 import json, sys
 p = sys.argv[1]
 c = json.load(open(p))
@@ -147,11 +147,11 @@ check "tree changed: exit code" "$([ "$code" -ne 0 ] && echo nonzero || echo zer
 gitc checkout -q tracked.txt
 
 # A step that says it ran nothing real (a gated step) is not recorded.
-python3 - "$repo/.claude/ops-kit.json" <<'EOF'
+python3 - "$repo/.claude/foreman.json" <<'EOF'
 import json, sys
 p = sys.argv[1]
 c = json.load(open(p))
-c["fullCheck"] = [{"part": "gated", "lock": None, "command": 'echo gated >>"$FA_MADE"; echo "ops-kit: no-cache"', "cache": {}}]
+c["fullCheck"] = [{"part": "gated", "lock": None, "command": 'echo gated >>"$FA_MADE"; echo "foreman: no-cache"', "cache": {}}]
 json.dump(c, open(p, "w"), indent=2)
 EOF
 commit gated
@@ -160,7 +160,7 @@ fc >/dev/null; fc >/dev/null
 check "no-cache marker: the step ran both times" "$(made)" "gated gated "
 
 # checkCommand alone is never cached.
-python3 - "$repo/.claude/ops-kit.json" <<'EOF'
+python3 - "$repo/.claude/foreman.json" <<'EOF'
 import json, sys
 p = sys.argv[1]
 c = json.load(open(p))
@@ -177,15 +177,15 @@ check "checkCommand: never cached" "$out $(made)" "FULLCHECK: all green at $(sha
 # suite_cache.py lint: every excluded path must exist at HEAD.
 setup_config
 commit config
-check "lint: real paths pass" "$(cd "$repo" && python3 tools/ops-kit/suite_cache.py lint; echo "exit=$?")" "exit=0"
-python3 - "$repo/.claude/ops-kit.json" <<'EOF'
+check "lint: real paths pass" "$(cd "$repo" && python3 tools/foreman/suite_cache.py lint; echo "exit=$?")" "exit=0"
+python3 - "$repo/.claude/foreman.json" <<'EOF'
 import json, sys
 p = sys.argv[1]
 c = json.load(open(p))
 c["fullCheck"][0]["cache"]["exclude"].append("no/such/path")
 json.dump(c, open(p, "w"), indent=2)
 EOF
-out=$(cd "$repo" && python3 tools/ops-kit/suite_cache.py lint; echo "exit=$?")
+out=$(cd "$repo" && python3 tools/foreman/suite_cache.py lint; echo "exit=$?")
 contains "lint: a missing path is reported" "$out" "no such path at HEAD: lint: no/such/path"
 contains "lint: and fails" "$out" "exit=1"
 setup_config
@@ -196,7 +196,7 @@ git clone -q --bare "$repo" "$fa/origin.git"
 gitc remote add origin "$fa/origin.git"
 gitc fetch -q origin
 export MAIN_CHECK_WORKTREE="$fa/mc"
-mc() { (cd "$repo" && tools/ops-kit/main_fullcheck.sh) 2>&1 | tail -1; }
+mc() { (cd "$repo" && tools/foreman/main_fullcheck.sh) 2>&1 | tail -1; }
 rm -f "$FA_MADE"
 out=$(fc)
 msha=$(git -C "$repo" rev-parse --short origin/main)

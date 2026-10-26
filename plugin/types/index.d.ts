@@ -2,7 +2,7 @@
 // and the pane in hooks/view.ts draws. Plain JSON, so a snapshot can live in
 // `$.state` and survive a hot reload of the module.
 
-/** One shared lock the queue serialises (tools/ops-kit/queue.sh <name> ...). */
+/** One shared lock the queue serialises (tools/foreman/queue.sh <name> ...). */
 export type OpsLockSpec = {
   name: string
   /** Minutes a job may hold the lock before the queue kills it. */
@@ -19,7 +19,7 @@ export type OpsActionSpec = {
 }
 
 /**
- * The merged config: `.claude/ops-kit.json` (shared, committed) with
+ * The merged config: `.claude/foreman.json` (shared, committed) with
  * `tmp/ops/config.json` (this machine, gitignored) on top; defaults fill the rest.
  */
 export type OpsConfig = {
@@ -48,7 +48,7 @@ export type OpsConfig = {
   refreshSeconds: number
   stallMinutes: number
   autoOpen: boolean
-  /** Agents run on a second Claude account (tools/ops-kit/claude-agents.sh); false when absent. */
+  /** Agents run on a second Claude account (tools/foreman/claude-agents.sh); false when absent. */
   agentsAccount: boolean
   /** The claude executable that lists the main account's sessions; `claude` when absent. */
   claude: string
@@ -294,7 +294,7 @@ export type OpsSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'ops-kit': {
+    'foreman': {
       snapshot: OpsSnapshot | null
       isConfirming: boolean
       notice: string | null

@@ -7,7 +7,7 @@ INIT="$KIT/plugin/scripts/ops_init.py"
 # A fresh git repo (main branch, one commit, a Makefile with a check target), printed.
 make_repo() {
   local dir
-  dir=$(mktemp -d "${TMPDIR:-/tmp}/ops-kit-test.XXXXXX")
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/foreman-test.XXXXXX")
   git -C "$dir" init -q -b main
   git -C "$dir" config user.name "Test Person"
   git -C "$dir" config user.email "test@example.invalid"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reads the ops kit config for the shell scripts beside it.
+"""Reads Foreman's config for the shell scripts beside it.
 
     ops_config.py main                 the main checkout (from any worktree)
     ops_config.py locks-dir            the lock folder (OPS_AGENT_LOCKS wins)
@@ -9,7 +9,7 @@
     ops_config.py check-cache          the global suite-cache settings as one JSON object
     ops_config.py get <key>            a top-level value (strings bare, others as JSON)
 
-The config is <main>/.claude/ops-kit.json (shared) with <main>/tmp/ops/config.json
+The config is <main>/.claude/foreman.json (shared) with <main>/tmp/ops/config.json
 (this machine) on top. Missing files read as empty.
 """
 import json
@@ -33,7 +33,7 @@ def main_checkout():
 
 def load(main):
     config = {}
-    for rel in (".claude/ops-kit.json", "tmp/ops/config.json"):
+    for rel in (".claude/foreman.json", "tmp/ops/config.json"):
         try:
             with open(os.path.join(main, rel)) as f:
                 layer = json.load(f)
@@ -90,7 +90,7 @@ def main():
         found = [lk for lk in locks(config) if lk["name"] == sys.argv[2]]
         if not found:
             names = ", ".join(lk["name"] for lk in locks(config)) or "none"
-            print(f"unknown lock {sys.argv[2]} (declared: {names}; add it to locks in .claude/ops-kit.json)", file=sys.stderr)
+            print(f"unknown lock {sys.argv[2]} (declared: {names}; add it to locks in .claude/foreman.json)", file=sys.stderr)
             return 2
         print(f"{found[0]['timeoutMin']:g}")
     elif op == "lock-names":

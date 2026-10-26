@@ -8,12 +8,12 @@
                 [--tools-dir DIR] [--force PATH ...] [--dry-run] [--json]
 
 Writes, in the checkout that holds PATH (default: the current directory):
-  .claude/ops-kit.json             the settings (created once; flags given update their keys)
+  .claude/foreman.json             the settings (created once; flags given update their keys)
   .claude/agents/<slug>-*.md       three agent tiers: engineer (Opus), implementer (Sonnet), checker (Haiku)
   <tools-dir>/...                  queue, full check and its cache, main check, action runner, lead status,
                                    heartbeat filter, quiet runner, second-account wrapper, usage tools
-  CLAUDE.md                        the rules, between ops-kit markers
-  .claude/ops-kit-files.json       what the init wrote last (so a rerun knows what you edited)
+  CLAUDE.md                        the rules, between foreman markers
+  .claude/foreman-files.json       what the init wrote last (so a rerun knows what you edited)
 and in the main checkout (where every worktree's agents meet):
   tmp/ops/                         status.json, backlog.json, lead-notes.md, briefs/, reports/ (only when missing)
   .gitignore                       tmp/ops/ and tmp/agent-locks/, unless already ignored
@@ -36,11 +36,21 @@ import sys
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATES = os.path.join(KIT, "templates")
-CONFIG = ".claude/ops-kit.json"
-MANIFEST = ".claude/ops-kit-files.json"
-BEGIN = "<!-- ops-kit:begin (managed by /ops-kit:init; edit freely, a rerun keeps your edits) -->"
-END = "<!-- ops-kit:end -->"
-BLOCK_KEY = "CLAUDE.md#ops-kit"
+CONFIG = ".claude/foreman.json"
+MANIFEST = ".claude/foreman-files.json"
+BEGIN = "<!-- foreman:begin (managed by /foreman:init; edit freely, a rerun keeps your edits) -->"
+END = "<!-- foreman:end -->"
+BLOCK_KEY = "CLAUDE.md#foreman"
+DEFAULT_TOOLS = "tools/foreman"
+# Before 0.3.0 the kit was called ops-kit. A repo set up then has these names; the first run of
+# this init adopts them in place (adopt_legacy) so the record's hashes still tell edited files from
+# untouched ones and nothing is written twice (a second rules section, a second tools folder).
+LEGACY_CONFIG = ".claude/ops-kit.json"
+LEGACY_MANIFEST = ".claude/ops-kit-files.json"
+LEGACY_TOOLS = "tools/ops-kit"
+LEGACY_BEGIN = re.compile(r"<!-- ops-kit:begin[^\n]*?-->")
+LEGACY_END = "<!-- ops-kit:end -->"
+LEGACY_BLOCK_KEY = "CLAUDE.md#ops-kit"
 TOOLS = [
     "queue.sh", "queue_lock.py", "queue_run.py", "fullcheck.sh", "steps_json.sh", "suite_cache.py", "main_fullcheck.sh",
     "run_action.sh", "lead_status.py", "needs_lead.py", "ops_config.py", "quiet.sh", "claude-agents.sh",
@@ -136,6 +146,60 @@ def main_branch(top):
     return ref.split("/", 1)[1] if ref and "/" in ref else "main"
 
 
+def adopt_legacy(top, dry):
+    """Renames a pre-0.3.0 (ops-kit) setup to Foreman's names and returns the notes to print.
+
+    Acts only when the old config exists and the new one does not, so it runs once. The tools
+    folder moves only when it is the old default and the new default is free; a custom toolsDir
+    stays. The record's hashes carry over under the new paths, which keeps an edited file "kept".
+    Returns (notes, config, files): with dry set nothing is touched and the adopted config and
+    record come back for the caller to use in memory; otherwise they are on disk and come back None.
+    """
+    old_config_path = os.path.join(top, LEGACY_CONFIG)
+    if not os.path.exists(old_config_path) or os.path.exists(os.path.join(top, CONFIG)):
+        return [], None, None
+    try:
+        config = load_json(old_config_path) or {}
+    except ValueError as e:
+        raise SystemExit(f"ops_init: {LEGACY_CONFIG} is not valid JSON ({e}); fix it and run again")
+    notes = [("adopted", CONFIG, f"from {LEGACY_CONFIG}")]
+    old_tools, new_tools = os.path.join(top, LEGACY_TOOLS), os.path.join(top, DEFAULT_TOOLS)
+    moved = str(config.get("toolsDir", LEGACY_TOOLS)).strip("/") == LEGACY_TOOLS and not os.path.exists(new_tools)
+    if moved:
+        config["toolsDir"] = DEFAULT_TOOLS
+        if os.path.isdir(old_tools):
+            notes.append(("adopted", DEFAULT_TOOLS + "/", f"moved from {LEGACY_TOOLS}/"))
+    files = {}
+    for rel, digest in ((load_json(os.path.join(top, LEGACY_MANIFEST)) or {}).get("files") or {}).items():
+        if rel == LEGACY_BLOCK_KEY:
+            rel = BLOCK_KEY
+        elif moved and rel.startswith(LEGACY_TOOLS + "/"):
+            rel = DEFAULT_TOOLS + rel[len(LEGACY_TOOLS):]
+        files[rel] = digest
+    claude_path = os.path.join(top, "CLAUDE.md")
+    claude = read(claude_path)
+    if claude is not None and LEGACY_BEGIN.search(claude) and LEGACY_END in claude:
+        claude = LEGACY_BEGIN.sub(lambda _: BEGIN, claude, count=1).replace(LEGACY_END, END, 1)
+        notes.append(("adopted", "CLAUDE.md", "section markers renamed"))
+    else:
+        claude = None
+    if dry:
+        notes.append(("adopted", "(dry run)", "a real run moves these first; until then the lines below show the tools and CLAUDE.md as new"))
+        return notes, config, files
+    if moved and os.path.isdir(old_tools):
+        os.makedirs(os.path.dirname(new_tools), exist_ok=True)
+        os.rename(old_tools, new_tools)
+    for rel, text in ((CONFIG, dump_json(config)), (MANIFEST, dump_json({"kit": "foreman", "files": dict(sorted(files.items()))})),
+                      ("CLAUDE.md", claude)):
+        if text is not None:
+            with open(os.path.join(top, rel), "w", encoding="utf-8") as f:
+                f.write(text)
+    os.remove(old_config_path)
+    if os.path.exists(os.path.join(top, LEGACY_MANIFEST)):
+        os.remove(os.path.join(top, LEGACY_MANIFEST))
+    return notes, None, None
+
+
 class Run:
     def __init__(self, top, main, dry, force):
         self.top = top
@@ -203,7 +267,7 @@ class Run:
             sep = "" if current.endswith("\n\n") else ("\n" if current.endswith("\n") else "\n\n")
             self.write(path, f"{current}{sep}{wrapped}")
             self.new_recorded[BLOCK_KEY] = sha(block.rstrip())
-            self.note("updated", rel, "ops-kit section added")
+            self.note("updated", rel, "foreman section added")
             return
         inner = current[start + len(BEGIN):end].strip("\n")
         if inner == block.rstrip():
@@ -212,12 +276,12 @@ class Run:
         elif self.recorded.get(BLOCK_KEY) == sha(inner) or rel in self.force:
             self.write(path, current[:start] + wrapped.rstrip("\n") + current[end + len(END):])
             self.new_recorded[BLOCK_KEY] = sha(block.rstrip())
-            self.note("updated", rel, "ops-kit section")
+            self.note("updated", rel, "foreman section")
         else:
             if BLOCK_KEY in self.recorded:
                 self.new_recorded[BLOCK_KEY] = self.recorded[BLOCK_KEY]
-            self.pending("CLAUDE.md.ops-kit-section.md", block)
-            self.note("kept", rel, "ops-kit section edited here; the kit's version is in tmp/ops/init-pending/CLAUDE.md.ops-kit-section.md")
+            self.pending("CLAUDE.md.foreman-section.md", block)
+            self.note("kept", rel, "foreman section edited here; the kit's version is in tmp/ops/init-pending/CLAUDE.md.foreman-section.md")
 
     def once(self, root, rel, text):
         """State that belongs to the lead: written only when missing."""
@@ -265,7 +329,7 @@ def check_text(config):
         )
     if config.get("checkCommand"):
         return f"`{config['checkCommand']}`"
-    return "not configured yet: set `checkCommand` in `.claude/ops-kit.json`"
+    return "not configured yet: set `checkCommand` in `.claude/foreman.json`"
 
 
 def lanes_text(config):
@@ -338,12 +402,16 @@ def main(argv=None):
         raise SystemExit(f"ops_init: {a.repo} is not inside a git checkout")
     common = git(top, "rev-parse", "--path-format=absolute", "--git-common-dir")
     main_root = os.path.dirname(common) if common and os.path.basename(common) == ".git" else top
+    adopted, adopted_config, adopted_files = adopt_legacy(top, a.dry_run)
     run = Run(top, main_root, a.dry_run, a.force)
+    run.results.extend(adopted)
+    if adopted_files is not None:
+        run.recorded = dict(adopted_files)
 
     # 1. The settings: created once, then only the keys given as flags change.
     config_path = os.path.join(top, CONFIG)
     try:
-        existing = load_json(config_path)
+        existing = adopted_config if adopted_config is not None else load_json(config_path)
     except ValueError as e:
         raise SystemExit(f"ops_init: {CONFIG} is not valid JSON ({e}); fix it and run again")
     config = dict(existing or {})
@@ -356,7 +424,7 @@ def main(argv=None):
         "slug": slug,
         "lead": f"{slug}-lead",
         "agentCap": 4,
-        "toolsDir": "tools/ops-kit",
+        "toolsDir": "tools/foreman",
         "locksDir": "tmp/agent-locks",
         "locks": [{"name": "check", "timeoutMin": 120}],
         "checkCommand": detect_check(top),
@@ -466,7 +534,7 @@ def main(argv=None):
     if wanted:
         current = read(ignore_path) or ""
         sep = "" if current == "" or current.endswith("\n") else "\n"
-        run.write(ignore_path, current + sep + "# ops kit: the lead's state, the queue locks and the agents' worktrees\n" + "\n".join(wanted) + "\n")
+        run.write(ignore_path, current + sep + "# Foreman: the lead's state, the queue locks and the agents' worktrees\n" + "\n".join(wanted) + "\n")
         run.note("updated" if current else "created", ".gitignore", ", ".join(wanted))
     else:
         run.note("unchanged", ".gitignore")
@@ -526,7 +594,7 @@ def main(argv=None):
             run.note("unchanged", project_rel)
 
     # 6. The record of what the init wrote, for the next run.
-    manifest = {"kit": "ops-kit", "files": dict(sorted(run.new_recorded.items()))}
+    manifest = {"kit": "foreman", "files": dict(sorted(run.new_recorded.items()))}
     manifest_path = os.path.join(top, MANIFEST)
     if load_json(manifest_path) != manifest:
         existed = os.path.exists(manifest_path)
@@ -549,7 +617,7 @@ def main(argv=None):
             if action != "unchanged":
                 print(f"{action:9} {path}{f'  ({note})' if note else ''}")
         if not config.get("checkCommand") and not config.get("fullCheck"):
-            print("note      no check command found: set checkCommand (or fullCheck) in .claude/ops-kit.json")
+            print("note      no check command found: set checkCommand (or fullCheck) in .claude/foreman.json")
         print(f"INIT{' (dry run)' if a.dry_run else ''}: {summary}")
     return 0
 

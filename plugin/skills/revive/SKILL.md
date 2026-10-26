@@ -1,6 +1,6 @@
 ---
 name: revive
-description: Revive a background agent that died, stalled, or ended on a usage limit or API error, in a repo using the ops kit; or hand its work to a fresh agent. Use when an agent card is red, lead_status shows not running or done without a final report, or the user says revive, resume or restart an agent.
+description: Revive a background agent that died, stalled, or ended on a usage limit or API error, in a repo using Foreman; or hand its work to a fresh agent. Use when an agent card is red, lead_status shows not running or done without a final report, or the user says revive, resume or restart an agent.
 ---
 
 # Revive an agent
@@ -16,7 +16,7 @@ claude --bg --resume <full sessionId> "Resumed by the lead. Your worktree is <ma
 
    It keeps its agent, model and permission mode.
 3. **If it hit a usage limit** and the limit has not reset, wait for the next check-in.
-4. **Replace instead of resume** when the model should change, the session is broken, or its context is too long: message it (or, if dead, read its worktree and log) for a hand-back (what is done, what remains, anything non-obvious), write that into a new brief, and start a fresh agent in the same worktree (`/ops-kit:start-agent`, without `-w`). Then `claude rm` the old session.
+4. **Replace instead of resume** when the model should change, the session is broken, or its context is too long: message it (or, if dead, read its worktree and log) for a hand-back (what is done, what remains, anything non-obvious), write that into a new brief, and start a fresh agent in the same worktree (`/foreman:start-agent`, without `-w`). Then `claude rm` the old session.
 5. Update its `step` and `sessionId` in status.json (a resume keeps the id; a replacement gets a new one). Checkpoint.
 
 Never kill an agent's processes by pattern. Never stop a queued job mid-run; its lock outlives it until the queue clears the dead owner.

@@ -239,7 +239,7 @@ test('config: defaults with no files, the local layer wins, bad input names its 
   assert.equal(parseConfig(JSON.stringify(PROJECT), '{"action":null}').action, null, 'the local layer can switch the action off')
   assert.deepEqual(parseConfig('{"locks":{"check":90,"sim":45}}').locks, [{ name: 'check', timeoutMin: 90 }, { name: 'sim', timeoutMin: 45 }])
   assert.deepEqual(parseConfig('{"locks":["check"]}').locks, [{ name: 'check', timeoutMin: 60 }])
-  assert.throws(() => parseConfig('{'), /\.claude\/ops-kit\.json/)
+  assert.throws(() => parseConfig('{'), /\.claude\/foreman\.json/)
   assert.throws(() => parseConfig(null, '[]'), /tmp\/ops\/config\.json is not an object/)
   assert.throws(() => parseConfig('{"locks":["../x"]}'), /not a plain name/)
   assert.equal(parseConfig('{"action":{"label":"x"}}').action, null, 'an action needs a command')
@@ -479,7 +479,7 @@ test('collect: both accounts, a missing file, a bad file, labels, live account p
   const w = world()
   w.files['/r/tmp/ops/usage/main.json'] = JSON.stringify(USAGE_MAIN)
   w.files['/r/tmp/ops/usage/agents.json'] = '{nope'
-  w.runs.push([has('/r/tools/ops-kit/claude-agents.sh'), ok(JSON.stringify([{ name: 'bglive', state: 'working' }, { name: 'demo-heartbeat', state: 'working' }, { name: 'lead' }]))])
+  w.runs.push([has('/r/tools/foreman/claude-agents.sh'), ok(JSON.stringify([{ name: 'bglive', state: 'working' }, { name: 'demo-heartbeat', state: 'working' }, { name: 'lead' }]))])
   w.runs.push([has('claude', 'agents'), ok(JSON.stringify([{ name: 'bggone', state: 'done' }, { name: 'lead' }]))])
   const cfg = { ...config, agentsAccount: true, accounts: { agents: 'Max' } }
   const snap = await collect(fakeIo(w), { repo: '/r', config: cfg, nowMs: NOW }, newCache())
@@ -500,7 +500,7 @@ test('pane: usage rows, stale reading, heartbeat account', async () => {
   const w = world()
   w.files['/r/tmp/ops/usage/main.json'] = JSON.stringify(USAGE_MAIN)
   w.files['/r/tmp/ops/usage/agents.json'] = JSON.stringify({ ...USAGE_MAIN, account: 'agents', readAt: NOW - 40 * MIN })
-  w.runs.push([has('/r/tools/ops-kit/claude-agents.sh'), ok(JSON.stringify([{ name: 'bglive', state: 'working' }]))])
+  w.runs.push([has('/r/tools/foreman/claude-agents.sh'), ok(JSON.stringify([{ name: 'bglive', state: 'working' }]))])
   const snap = await collect(fakeIo(w), { repo: '/r', config: { ...config, agentsAccount: true }, nowMs: NOW }, newCache())
   const noop = () => {}
   const actions = { refresh: noop, askAction: noop, confirmAction: noop, cancelAction: noop, openPreviews: noop }

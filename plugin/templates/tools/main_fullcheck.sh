@@ -21,7 +21,7 @@ wt=${MAIN_CHECK_WORKTREE:-$main/.claude/worktrees/main-check}
 ref=${MAIN_CHECK_REF:-origin/$branch}
 pidf="$main/tmp/ops/main-check.pid"
 log="$main/tmp/logs/main-check.log"
-tools=$(python3 -I "$here/ops_config.py" get toolsDir 2>/dev/null) || tools=tools/ops-kit
+tools=$(python3 -I "$here/ops_config.py" get toolsDir 2>/dev/null) || tools=tools/foreman
 mkdir -p "$main/tmp/ops" "$main/tmp/logs"
 if [ -f "$pidf" ] && kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null; then
   echo "main_fullcheck: already running (pid $(cat "$pidf"))"

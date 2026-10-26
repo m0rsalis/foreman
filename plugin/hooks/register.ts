@@ -13,10 +13,10 @@ import type { Io } from './data.ts'
 import { renderPanel } from './view.ts'
 import type { PanelActions } from './view.ts'
 
-const PANE = 'ops-kit'
-const snapshot = atom({ plugin: 'ops-kit', key: 'snapshot' } as const, null)
-const isConfirming = atom({ plugin: 'ops-kit', key: 'isConfirming' } as const, false)
-const notice = atom({ plugin: 'ops-kit', key: 'notice' } as const, null)
+const PANE = 'foreman'
+const snapshot = atom({ plugin: 'foreman', key: 'snapshot' } as const, null)
+const isConfirming = atom({ plugin: 'foreman', key: 'isConfirming' } as const, false)
+const notice = atom({ plugin: 'foreman', key: 'notice' } as const, null)
 
 type Context = { repo: string; config: OpsConfig }
 
@@ -72,7 +72,7 @@ async function locate($: EngineInterface): Promise<Context | string> {
     const project = await readIfThere($, `${repo}/${PROJECT_CONFIG}`)
     const local = await readIfThere($, `${repo}/${LOCAL_CONFIG}`)
     if (project === null && local === null && !(await $.fs.exists(`${repo}/tmp/ops/status.json`))) {
-      return `Ops kit is not set up in ${repo}: run /ops-kit:init there.`
+      return `Foreman is not set up in ${repo}: run /foreman:init there.`
     }
     return { repo, config: parseConfig(project, local) }
   } catch (err) {
@@ -178,7 +178,7 @@ async function addCommand($: EngineInterface): Promise<void> {
   try {
     await $.command.register({ name: 'ops', description: 'Open the ops panel (agents, locks, backlog, sign-off, checks)', immediate: true })
   } catch (err) {
-    $.ui.log(`ops-kit: /ops not registered: ${errorText(err)}`, { to: 'debug' })
+    $.ui.log(`foreman: /ops not registered: ${errorText(err)}`, { to: 'debug' })
   }
 }
 

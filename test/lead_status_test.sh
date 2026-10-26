@@ -9,7 +9,7 @@ repo=$(make_repo)
 bin=$(mktemp -d)
 trap 'rm -rf "$repo" "$bin"' EXIT
 python3 "$INIT" --repo "$repo" --owner Sam --slug demo --agents-account --lanes core:1,client:1,assets:1,flex:1 >/dev/null || { echo "FAIL: init"; exit 1; }
-T="$repo/tools/ops-kit"
+T="$repo/tools/foreman"
 
 # The fake claude answers per account: the agents' account sets CLAUDE_CONFIG_DIR.
 cat >"$bin/claude" <<EOF
@@ -75,7 +75,7 @@ done
 case "$out" in *"flex 0/1 "*"ready"*) echo "FAIL: flex keeps no briefs but shows a ready count"; fail=1 ;; *) echo "ok: flex shows no ready count" ;; esac
 
 # Without lanes there is no lanes line and the backlog stays one list.
-python3 - "$repo/.claude/ops-kit.json" <<'EOF'
+python3 - "$repo/.claude/foreman.json" <<'EOF'
 import json, sys
 p = sys.argv[1]
 c = json.load(open(p))
@@ -87,7 +87,7 @@ case "$out" in *"lanes:"*) echo "FAIL: lanes line without lanes"; fail=1 ;; *) e
 contains "no lanes: the backlog lists" "$out" "B-1 [ready"
 
 # Without the second account only the main list is read.
-python3 - "$repo/.claude/ops-kit.json" <<'EOF'
+python3 - "$repo/.claude/foreman.json" <<'EOF'
 import json, sys
 p = sys.argv[1]
 c = json.load(open(p))

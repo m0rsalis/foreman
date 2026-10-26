@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The full check's suite cache.
 
-A `fullCheck` step in .claude/ops-kit.json that carries a `cache` object is
+A `fullCheck` step in .claude/foreman.json that carries a `cache` object is
 skipped by fullcheck.sh when it already passed on exactly the same inputs. A
 step without `cache` always runs, and `checkCommand` alone is never cached.
 The step's fingerprint is:
@@ -92,9 +92,9 @@ def under(path, prefixes):
 
 
 def toolchain_paths(config):
-    tools = str(config.get('toolsDir') or 'tools/ops-kit').strip('/')
+    tools = str(config.get('toolsDir') or 'tools/foreman').strip('/')
     extra = config.get('checkCache') if isinstance(config.get('checkCache'), dict) else {}
-    return [tools, '.claude/ops-kit.json', '.gitignore'] + strings(extra.get('toolchain'))
+    return [tools, '.claude/foreman.json', '.gitignore'] + strings(extra.get('toolchain'))
 
 
 def inputs(config, step, entries=None):
