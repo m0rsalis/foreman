@@ -5,6 +5,7 @@
                 [--project NAME] [--cap N] [--check CMD] [--locks check:120,db:30]
                 [--lanes core:1:src/core+docs,ui:2,flex:1] [--agents-account | --no-agents-account]
                 [--main-branch NAME] [--no-main-check] [--usage] [--compact-window TOKENS]
+                [--merge-by agent|lead] [--merge-method merge|squash|rebase]
                 [--tools-dir DIR] [--force PATH ...] [--dry-run] [--json]
 
 Writes, in the checkout that holds PATH (default: the current directory):
@@ -16,9 +17,10 @@ Writes, in the checkout that holds PATH (default: the current directory):
   .claude/foreman-files.json       what the init wrote last (so a rerun knows what you edited)
 and in the main checkout (where every worktree's agents meet):
   tmp/ops/                         status.json, backlog.json, lead-notes.md, briefs/, reports/ (only when missing)
-  .gitignore                       tmp/ops/ and tmp/agent-locks/, unless already ignored
+  .gitignore                       tmp/ops/, tmp/agent-locks/, tmp/logs/, tmp/previews/ and more, unless already ignored
   .claude/settings.local.json      the permission entries background agents need (added, never removed)
-  .claude/settings.json            autoCompactWindow and, with --usage, the status line (only keys that are missing)
+  .claude/settings.json            autoCompactWindow and, with --usage, the status line (only keys that are missing);
+                                   an env.CLAUDE_CODE_AUTO_COMPACT_WINDOW an earlier kit wrote is removed
 
 Idempotent: a second run with the same inputs changes nothing. A file the
 init wrote and nobody changed is updated when the kit's version of it
@@ -60,6 +62,11 @@ TIERS = ["engineer", "implementer", "checker"]
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 LOCK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 COMPACT_WINDOW = 300000
+# The variable outranks autoCompactWindow, --autocompact and /autocompact, so with it set no task can
+# get a bigger window. Kits before 0.4.0 wrote it; the init removes the value it wrote (step 5b).
+COMPACT_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+MERGE_BY = ("agent", "lead")
+MERGE_METHODS = ("merge", "squash", "rebase")
 
 
 def git(cwd, *args):
@@ -343,7 +350,45 @@ def lanes_text(config):
     return "Lanes: " + ", ".join(out) + "."
 
 
-def permissions(tools):
+def merge_values(by, method):
+    """The merge wording for the agent definitions and the CLAUDE.md section, from `mergeBy` and
+    `mergeMethod`. With the lead merging (a review bot gates merges, say) agents stop at "PR ready";
+    keeping that a setting leaves the agent files the kit's, so they still take kit updates."""
+    cmd = f"gh pr merge <n> --{method}"
+    if by == "agent":
+        return {
+            "MERGE_CMD": cmd,
+            "MERGE_EVENT": "merge",
+            "MERGE_OWNER": "agents merge their own PRs, and",
+            "MERGE_GATE": "every merge",
+            "MERGE_ON_GREEN": "Merge only on `FULLCHECK: all green at <sha>` where `<sha>` is your branch head and "
+                              f"`git merge-base --is-ancestor origin/main <sha>` holds after a `git fetch` (`{cmd}`; never force-push main).",
+            "MERGE_LINE": "one line after each merge",
+            "CHECKER_ROLE": "merging when green",
+            "CHECKER_ON_GREEN": "merge its PR",
+            "CHECKER_JOB": "check and merge a PR",
+            "CHECKER_STEP": f"`git push`, `{cmd}`, confirm with `gh pr view <n> --json state`.",
+            "CHECKER_RESULT": "merged or not",
+        }
+    return {
+        "MERGE_CMD": cmd,
+        "MERGE_EVENT": "PR ready",
+        "MERGE_OWNER": "the lead merges (an agent reports its PR ready and never merges it), and",
+        "MERGE_GATE": "reporting a PR ready",
+        "MERGE_ON_GREEN": "Report the PR ready only on `FULLCHECK: all green at <sha>` where `<sha>` is your branch head, pushed, and "
+                          "`git merge-base --is-ancestor origin/main <sha>` holds after a `git fetch`. Never merge it yourself: "
+                          "the lead merges. Never force-push main.",
+        "MERGE_LINE": "one line when a PR is ready for the lead to merge",
+        "CHECKER_ROLE": "reporting the PR ready when green",
+        "CHECKER_ON_GREEN": "report its PR ready to the lead",
+        "CHECKER_JOB": "check a PR for the lead to merge",
+        "CHECKER_STEP": "`git push`, confirm with `gh pr view <n> --json headRefOid` that the PR's head is `<sha>`. "
+                        "Never merge: the lead does.",
+        "CHECKER_RESULT": "ready or not",
+    }
+
+
+def permissions(tools, agents_merge=True):
     return [
         "Bash(claude --bg:*)",
         "Bash(claude agents:*)",
@@ -360,7 +405,8 @@ def permissions(tools):
         "Bash(git merge:*)",
         "Bash(git worktree:*)",
         "Bash(gh pr create:*)",
-        "Bash(gh pr merge:*)",
+        # Only where agents merge (mergeBy "agent"); a lead that merges is asked each time.
+        *(["Bash(gh pr merge:*)"] if agents_merge else []),
         "Bash(gh pr view:*)",
         "Bash(gh pr list:*)",
         f"Bash({tools}/queue.sh:*)",
@@ -391,6 +437,8 @@ def main(argv=None):
     p.add_argument("--main-check", action=argparse.BooleanOptionalAction)
     p.add_argument("--usage", action=argparse.BooleanOptionalAction)
     p.add_argument("--compact-window", type=int)
+    p.add_argument("--merge-by", choices=MERGE_BY)
+    p.add_argument("--merge-method", choices=MERGE_METHODS)
     p.add_argument("--tools-dir")
     p.add_argument("--force", action="append", default=[])
     p.add_argument("--dry-run", action="store_true")
@@ -436,6 +484,8 @@ def main(argv=None):
         "mainCheck": True,
         "usage": False,
         "autoCompactWindow": COMPACT_WINDOW,
+        "mergeBy": "agent",
+        "mergeMethod": "merge",
         "previews": ["tmp/previews"],
         "action": None,
         "decisionLog": None,
@@ -451,12 +501,16 @@ def main(argv=None):
         "lanes": parse_lanes(a.lanes) if a.lanes is not None else None,
         "agentsAccount": a.agents_account, "mainBranch": a.main_branch, "mainCheck": a.main_check,
         "usage": a.usage, "autoCompactWindow": a.compact_window,
+        "mergeBy": a.merge_by, "mergeMethod": a.merge_method,
     }
     for key, value in flags.items():
         if value is not None:
             config[key] = value
     if not SLUG.match(str(config["slug"])):
         raise SystemExit(f"ops_init: slug {config['slug']!r} must be lowercase letters, digits and dashes")
+    for key, allowed in (("mergeBy", MERGE_BY), ("mergeMethod", MERGE_METHODS)):
+        if config[key] not in allowed:
+            raise SystemExit(f"ops_init: {key} {config[key]!r} in {CONFIG} must be one of {', '.join(allowed)}")
     tools = str(config["toolsDir"]).strip("/")
     if os.path.isabs(tools) or ".." in tools.split("/"):
         raise SystemExit("ops_init: toolsDir must be a path inside the repo")
@@ -485,6 +539,8 @@ def main(argv=None):
         "HEARTBEAT_ACCOUNT": " on the agents' account, so the main account's usage limit cannot stop the check-ins" if config.get("agentsAccount") else "",
         "LANES": lanes_text(config),
         "NOW": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "PREVIEW_DIR": next((p for p in config.get("previews") or [] if isinstance(p, str) and p), "tmp/previews"),
+        **merge_values(config["mergeBy"], config["mergeMethod"]),
     }
 
     window = int(config.get("autoCompactWindow") or 0)
@@ -525,8 +581,10 @@ def main(argv=None):
 
     # 4. .gitignore: the state and the locks stay out of git.
     # tmp/logs holds quiet.sh and main_fullcheck.sh logs; an untracked file there would make the main
-    # checkout dirty and turn the suite cache off.
+    # checkout dirty and turn the suite cache off. tmp/previews is where an agent saves previews in its
+    # own worktree: untracked, they would make its full check say "+ uncommitted changes" and skip the cache.
     probes = (("/tmp/ops/", "tmp/ops/status.json"), ("/tmp/agent-locks/", "tmp/agent-locks/x"), ("/tmp/logs/", "tmp/logs/x"),
+              ("/tmp/previews/", "tmp/previews/x"),
               ("/.claude/settings.local.json", ".claude/settings.local.json"), ("/.claude/worktrees/", ".claude/worktrees/x/y"))
     wanted = [line for line, probe in probes
               if subprocess.run(["git", "-C", top, "check-ignore", "-q", "--no-index", probe], check=False).returncode != 0]
@@ -552,7 +610,7 @@ def main(argv=None):
         settings = settings or {}
         perms = settings.setdefault("permissions", {})
         allow = perms.setdefault("allow", [])
-        missing = [entry for entry in permissions(tools) if entry not in allow]
+        missing = [entry for entry in permissions(tools, config["mergeBy"] == "agent") if entry not in allow]
         if missing:
             existed = os.path.exists(settings_path)
             allow.extend(missing)
@@ -562,7 +620,9 @@ def main(argv=None):
             run.note("unchanged", settings_rel)
 
     # 5b. Project settings every session reads: the compaction window and, with usage on, the status line.
-    # Only keys that are missing are added; a value someone set stays.
+    # Only keys that are missing are added; a value someone set stays. The one removal: COMPACT_ENV when
+    # it holds exactly the value an earlier kit wrote (the window as a string), and `env` with it when
+    # that leaves it empty. A different value is someone's own and stays.
     project_rel = ".claude/settings.json"
     project_path = os.path.join(top, project_rel)
     try:
@@ -573,23 +633,24 @@ def main(argv=None):
         run.note("kept", project_rel, "not valid JSON; add autoCompactWindow and statusLine by hand (README)")
     else:
         project = project or {}
-        added = []
+        changes = []
         window = int(config.get("autoCompactWindow") or 0)
         if window > 0 and "autoCompactWindow" not in project:
             project["autoCompactWindow"] = window
-            added.append("autoCompactWindow")
-        if window > 0 and not isinstance(project.get("env"), dict):
-            project["env"] = {}
-        if window > 0 and isinstance(project.get("env"), dict) and "CLAUDE_CODE_AUTO_COMPACT_WINDOW" not in project["env"]:
-            project["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(window)
-            added.append("env.CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+            changes.append("autoCompactWindow")
+        env = project.get("env")
+        if window > 0 and isinstance(env, dict) and env.get(COMPACT_ENV) == str(window):
+            del env[COMPACT_ENV]
+            if not env:
+                del project["env"]
+            changes.append(f"removed env.{COMPACT_ENV}: it outranks --autocompact")
         if config.get("usage") and "statusLine" not in project:
             project["statusLine"] = {"type": "command", "command": f'python3 "$CLAUDE_PROJECT_DIR"/{tools}/statusline.py'}
-            added.append("statusLine")
-        if added:
+            changes.append("statusLine")
+        if changes:
             existed = os.path.exists(project_path)
             run.write(project_path, dump_json(project))
-            run.note("updated" if existed else "created", project_rel, ", ".join(added))
+            run.note("updated" if existed else "created", project_rel, ", ".join(changes))
         else:
             run.note("unchanged", project_rel)
 

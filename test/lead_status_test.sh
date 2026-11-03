@@ -17,7 +17,7 @@ cat >"$bin/claude" <<EOF
 if [ -n "\$CLAUDE_CONFIG_DIR" ]; then
   echo '[{"kind":"background","name":"fx-agent","id":"fx1","status":"idle","state":"done","cwd":"$repo"}]'
 else
-  echo '[{"kind":"background","id":"abc123","status":"busy","state":"working","cwd":"$repo"},{"kind":"background","name":null,"id":"def456","status":"idle","state":"done","cwd":"$repo"},{"kind":"background","name":"demo-heartbeat","id":"hb1","status":"idle","state":"idle","cwd":"$repo"}]'
+  echo '[{"kind":"background","id":"abc123","status":"busy","state":"working","cwd":"$repo"},{"kind":"background","name":null,"id":"def456","status":"idle","state":"done","cwd":"$repo"},{"kind":"background","name":"demo-heartbeat","id":"hb1","status":"idle","state":"idle","cwd":"$repo"},{"kind":"background","name":"ui-a","id":"oth1","status":"busy","state":"working","cwd":"/elsewhere/other-repo"},{"kind":"background","name":"wt-agent","id":"wt1","status":"busy","state":"working","cwd":"$bin/wt"}]'
 fi
 EOF
 chmod +x "$bin/claude"
@@ -26,6 +26,7 @@ chmod +x "$bin/gh"
 mkdir -p "$bin/main/sessions" "$bin/agents"
 ln -s "$bin/main/sessions" "$bin/agents/sessions"
 export OPS_AGENTS_CONFIG=$bin/agents OPS_MAIN_CONFIG=$bin/main OPS_CLAUDE_BIN=$bin/claude
+git -C "$repo" worktree add -q "$bin/wt" -b side
 run() { (cd "$repo" && PATH="$bin:$PATH" CLAUDE_CONFIG_DIR=$bin/agents python3 "$T/lead_status.py" 2>&1); }
 
 # CLAUDE_CONFIG_DIR set as in an agent's shell: the main list must ignore it.
@@ -50,6 +51,10 @@ check "lead_status exit" "$code" 0
 for want in "abc123 busy/working main account" def456 demo-heartbeat "fx-agent fx1 idle/done agents account"; do
   contains "both accounts: $want" "$out" "$want"
 done
+# Only this repo's sessions, by cwd: one in a worktree outside the main checkout is, one in
+# another repo is not, even under the name of an agent in this status.json.
+contains "outside worktree's session listed" "$out" "wt-agent wt1 busy/working"
+case "$out" in *oth1*) echo "FAIL: another repo's session listed under a known name"; fail=1 ;; *) echo "ok: another repo's session not listed" ;; esac
 
 # Lanes: client is over its cap; assets holds an in-progress item that names its agent
 # (no lane in status.json); flex's only ready item waits for a dependency, so flex has no next.

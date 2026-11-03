@@ -48,11 +48,33 @@ check "agents account read" "$(NEEDS_LEAD_NOW=11600 $N)" "NOTIFY*agent fx: none 
 echo '[{"name":"fx","kind":"background","state":"done"}]' >"$t/agents2.json"
 check "agents account change" "$(NEEDS_LEAD_NOW=12200 $N)" "NOTIFY*fx: working -> done (no process)*"
 
+# Only this repo's background sessions: the lists hold every session on the
+# machine. Another repo's agent and heartbeat (a heartbeat name this config does
+# not ignore) and an interactive session in this very checkout change nothing;
+# an agent in a worktree inside the main checkout or outside it does.
+echo '[]' >"$t/agents2.json"
+echo '[]' >"$t/agents.json"
+NEEDS_LEAD_NOW=12800 $N >/dev/null
+other=/elsewhere/other-repo
+cat >"$t/agents.json" <<EOF
+[{"name":"other-agent","kind":"background","state":"working","pid":5,"cwd":"$other/.claude/worktrees/other-agent"},
+ {"name":"ops-heartbeat","kind":"background","state":"working","pid":6,"cwd":"$other"},
+ {"name":"Design chat","kind":"interactive","status":"idle","pid":7,"cwd":"$repo"}]
+EOF
+check "other repos' and interactive sessions: quiet" "$(NEEDS_LEAD_NOW=13400 $N)" "QUIET"
+git -C "$repo" worktree add -q "$t/wt" -b side
+cat >"$t/agents.json" <<EOF
+[{"name":"in-tree","kind":"background","state":"working","pid":8,"cwd":"$repo/.claude/worktrees/in-tree"},
+ {"name":"out-tree","kind":"background","state":"working","pid":9,"cwd":"$t/wt"}]
+EOF
+check "agents in this repo's worktrees notify" "$(NEEDS_LEAD_NOW=14000 $N)" "NOTIFY agent in-tree: none -> working; agent out-tree: none -> working"
+
 # Stalls: an idle agent with nothing running, and a command running too long.
 echo '[]' >"$t/agents2.json"
 echo '[]' >"$t/agents.json"
 NOW=200000
-session() { echo "{\"pid\":$2,\"name\":\"$1\",\"kind\":\"background\",\"status\":\"$3\",\"statusUpdatedAt\":$(( ($NOW - $4 * 60) * 1000 ))}" >"$t/sessions/$2.json"; }
+# name pid status minutes-in-status [cwd]
+session() { echo "{\"pid\":$2,\"name\":\"$1\",\"kind\":\"background\",\"status\":\"$3\",\"statusUpdatedAt\":$(( ($NOW - $4 * 60) * 1000 ))${5:+,\"cwd\":\"$5\"}}" >"$t/sessions/$2.json"; }
 echo '  900     1  05:00 /usr/bin/caffeinate -i -t 300' >"$t/ps.txt"
 NEEDS_LEAD_NOW=$NOW $N >/dev/null
 session fx 900 idle 10
@@ -75,6 +97,11 @@ check "etime with days: new command" "$(NEEDS_LEAD_NOW=$NOW $N)" "NOTIFY fx: one
 echo '[]' >"$t/ps.txt"; session demo-heartbeat 902 idle 90
 session fx 900 busy 90
 check "heartbeat and busy agents ignored" "$(NEEDS_LEAD_NOW=$NOW $N)" "QUIET"
+session other-agent 904 idle 40 "$other/.claude/worktrees/other-agent"
+session ops-heartbeat 905 idle 40 "$other"
+check "another repo's idle sessions ignored" "$(NEEDS_LEAD_NOW=$NOW $N)" "QUIET"
+session out-tree 906 idle 40 "$t/wt"
+check "an idle agent in an outside worktree notifies" "$(NEEDS_LEAD_NOW=$NOW $N)" "NOTIFY out-tree idle 40 min, nothing running"
 
 # Usage thresholds: weekly 80 and 95, 5-hour 90; once per crossing per period; stale ignored.
 echo '[]' >"$t/ps.txt"; rm -f "$t"/sessions/*

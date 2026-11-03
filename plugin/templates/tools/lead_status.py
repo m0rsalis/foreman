@@ -36,6 +36,26 @@ def sh(*args):
         return ""
 
 
+def repo_paths(root):
+    """The main checkout and each of its worktrees, resolved: where this repo's sessions run.
+    `-w` worktrees sit inside the main checkout, but `git worktree add` can put one anywhere."""
+    paths = [root]
+    for line in sh("git", "-C", root, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            paths.append(line[9:])
+    return sorted({os.path.realpath(p) for p in paths})
+
+
+def in_repo(cwd, paths):
+    """Whether a session working in `cwd` is this repo's. `claude agents --json --all` and
+    ~/.claude/sessions list every session on the machine, other repos' included. A session
+    without a cwd counts, as in the panel: a missed stall costs more than one stray wake."""
+    if not cwd:
+        return True
+    cwd = os.path.realpath(cwd)
+    return any(cwd == p or cwd.startswith(p.rstrip(os.sep) + os.sep) for p in paths)
+
+
 def norm_status(value):
     return str(value or "inbox").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -275,7 +295,10 @@ def main():
     # sub-agents (the Agent tool) do not. With agentsAccount set, agents run on
     # a second account whose background service lists only its own sessions, so
     # both lists are read; each session is tagged with the command that controls it.
+    # Only this repo's sessions, by cwd: a name is no key, since another repo's agent or heartbeat
+    # can carry the same one.
     sessions = {}
+    paths = repo_paths(root)
     accounts = [("main", ["env", "-u", "CLAUDE_CONFIG_DIR", "claude"], "claude")]
     if config.get("agentsAccount"):
         wrapper = os.path.join(root, tools, "claude-agents.sh")
@@ -283,10 +306,7 @@ def main():
     for account, cmd, cli in accounts:
         try:
             for s in json.loads(sh(*cmd, "agents", "--json", "--all") or "[]"):
-                cwd = s.get("cwd") or ""
-                here = cwd == root or cwd.startswith(root + os.sep)
-                named = s.get("name") in {a.get("sessionName") or a.get("name") for a in status.get("agents", [])}
-                if s.get("kind") == "background" and (here or named):
+                if s.get("kind") == "background" and in_repo(s.get("cwd"), paths):
                     s["account"], s["cli"] = account, cli
                     # An unnamed session has no name (None or empty): key it by id.
                     sessions[s.get("name") or s.get("id") or "(unnamed)"] = s

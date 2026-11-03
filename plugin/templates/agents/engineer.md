@@ -11,11 +11,11 @@ Read `CLAUDE.md` first and follow it exactly. The lead's brief tells you your tr
 ## How to work
 - Work in your own git worktree (the lead starts you isolated or names an existing worktree; work only there).
 - One branch and one PR per milestone or fix batch. Start from the latest `origin/main` and merge `origin/main` again right before the PR: other agents merge in parallel. Keep edits to shared files small and additive; resolve conflicts keeping both sides.
-- Run the full check before every merge: `{{TOOLS}}/fullcheck.sh` from your worktree root, IN THE BACKGROUND with output to a log file, then read its final line. Merge only on `FULLCHECK: all green at <sha>` where `<sha>` is your branch head and `git merge-base --is-ancestor origin/main <sha>` holds after a `git fetch` (`gh pr merge <n> --merge`; never force-push main). If it does not hold, main moved: merge it again and rerun. Steps whose inputs did not change come back `cached`; that is the check working, not skipped work. If the lead announced a merge order, wait for the PR ahead of you to be on main before your check.
+- Run the full check before {{MERGE_GATE}}: `{{TOOLS}}/fullcheck.sh` from your worktree root, IN THE BACKGROUND with output to a log file, then read its final line. {{MERGE_ON_GREEN}} If it does not hold, main moved: merge it again and rerun. Steps whose inputs did not change come back `cached`; that is the check working, not skipped work. If the lead announced a merge order, wait for the PR ahead of you to be on main before your check.
 - Shared resources go through the FIFO queue: `{{TOOLS}}/queue.sh <lock> <cmd>` (the locks are listed in `.claude/foreman.json`). Take one lock at a time. For multi-step shell work pass a script file, not a long `bash -c` string.
 - Run anything that takes more than a few minutes in the background and wait for its notification; long foreground commands stall agents.
 - Before claiming anything works, make sure its test fails without it (break, watch red, restore). Report outcomes plainly, including what you did not verify.
-- Previews for {{OWNER}} (images, recordings, reports) go in the main checkout's `tmp/`, named in your report.
+- Previews for {{OWNER}} (images, recordings, reports) go in your worktree's own `tmp/previews/` (your sandbox cannot write the main checkout), each path named in your report; the lead copies them out before it removes your worktree.
 
 ## Token budget
 - Read a file once and keep its content; read a range, not the whole file, when you know where to look. Search with the narrowest pattern. Do not re-read a file you just edited. Long command output goes to a log: print only the summary and the failing lines (`{{TOOLS}}/quiet.sh <name> <command...>` does this).
@@ -29,4 +29,4 @@ Read `CLAUDE.md` first and follow it exactly. The lead's brief tells you your tr
 - Run git and gh commands as their own Bash calls. Conventional commits with the attribution trailer your harness gives you.
 
 ## Reporting
-Report to `{{LEAD}}` by SendMessage only: one line after each merge; a hand-back line before stopping on a usage limit (what is done, what remains, anything non-obvious); a short final report: PR links, what changed, test evidence, previews to look at, defaults relied on, anything left open or only {{OWNER}} can decide. If `{{LEAD}}` is unreachable, send it to `{{HEARTBEAT}}` and carry on.
+Report to `{{LEAD}}` by SendMessage only: {{MERGE_LINE}}; a hand-back line before stopping on a usage limit (what is done, what remains, anything non-obvious); a short final report: PR links, what changed, test evidence, previews to look at, defaults relied on, anything left open or only {{OWNER}} can decide. If `{{LEAD}}` is unreachable, send it to `{{HEARTBEAT}}` and carry on.
