@@ -8,11 +8,14 @@
 #   FULLCHECK: all green at <short sha> + uncommitted changes (...)
 #   FULLCHECK: <part> FAILED
 # The green line names the commit it checked: merge only on a line that names
-# the PR's head commit. If HEAD or the tracked files changed during the run it
-# says "all green at <sha>, but HEAD is now <sha>" (or "... but the working
-# tree changed") and exits 1: rerun before merging. Exits non-zero on
-# failure. Run it in the background with output to a log and read the last
-# line; never hide its exit status behind a pipe.
+# the PR's head commit. The sha is abbreviated and `gh pr view --json
+# headRefOid` is the full 40 characters, so expand the short one
+# (`git rev-parse <sha>`) before comparing; the strings never match. If HEAD
+# or the tracked files changed during the run it says "all green at <sha>,
+# but HEAD is now <sha>" (or "... but the working tree changed") and exits 1:
+# rerun before merging. Exits non-zero on failure. Run it in the background
+# with output to a log and read the last line; never hide its exit status
+# behind a pipe.
 #
 # Suite cache (suite_cache.py): on a clean worktree a step that has a `cache`
 # object and already passed on the same inputs prints "STEP <part> cached" and

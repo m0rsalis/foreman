@@ -223,7 +223,35 @@ rm -rf "$full" "$old" "$oldkit"
 dflt=$(make_repo)
 lead=$(make_repo)
 trap 'rm -rf "$repo" "$repo-wt" "${dry:-}" "${dflt:-}" "${lead:-}" "${cw:-}"' EXIT
+# The CLAUDE.md section per mergeMethod. After a squash or rebase merge the PR branch is never an
+# ancestor of main, so `git branch -d` always refuses ("not fully merged"): the section says -D then,
+# but only for a PR that shows MERGED, never on ancestry (a CLOSED PR's branch may be the only copy).
+# The `worktree-<task>` branch `claude --bg -w` made keeps -d, and -d refusing means unmerged commits.
+method_text_checks() { # <label> <repo> <method>
+  local label=$1 dir=$2 method=$3 md after
+  md=$(cat "$dir/CLAUDE.md")
+  after=$(grep '^- \*\*After a merge' "$dir/CLAUDE.md")
+  contains "$label: the PR head check expands the short sha" "$md" "\`[ \"\$(gh pr view <n> --json headRefOid --jq .headRefOid)\" = \"\$(git rev-parse <sha>)\" ]\`"
+  contains "$label: a -d refusal on the -w branch means look first" "$after" "(\`git log origin/main.."
+  contains "$label: ... before forcing" "$after" "before forcing."
+  check "$label: the -w branch is never force-deleted" "$(printf '%s' "$after" | grep -c 'branch -D worktree')" 0
+  if [ "$method" = merge ]; then
+    contains "$label: the merged branch goes with -d" "$after" "\`git branch -d <branch>\` for the merged branch and \`git branch -d worktree-<task>\`"
+    check "$label: no -D anywhere" "$(printf '%s' "$after" | grep -c 'branch -D')" 0
+    check "$label: no PR state lookup" "$(printf '%s' "$after" | grep -c 'mergedAt')" 0
+  else
+    contains "$label: the PR branch goes with -D" "$after" "the PR branch with \`git branch -D <branch>\`"
+    contains "$label: only for a merged PR" "$after" "only after \`gh pr view <n> --json state,mergedAt\` shows \`state\` \`MERGED\` and a \`mergedAt\` that is not null"
+    contains "$label: names the method" "$after" "(a $method merge puts new commits on \`main\`"
+    contains "$label: never on ancestry" "$after" "never decide on ancestry"
+    contains "$label: a closed PR's branch is kept" "$after" "keep the branch of a \`CLOSED\` PR"
+    contains "$label: the -w branch keeps -d" "$after" "keeps \`git branch -d\`"
+    check "$label: -D once, for the PR branch" "$(printf '%s' "$after" | grep -o 'branch -D' | wc -l | tr -d ' ')" 1
+    check "$label: no plain -d on the PR branch" "$(printf '%s' "$after" | grep -c 'branch -d <branch>')" 0
+  fi
+}
 python3 "$INIT" --repo "$dflt" --owner Sam --slug demo >/dev/null
+method_text_checks "merge method" "$dflt" merge
 for f in engineer implementer checker; do
   contains "default: $f merges with --merge" "$(cat "$dflt/.claude/agents/demo-$f.md")" "\`gh pr merge <n> --merge\`"
 done
@@ -235,6 +263,7 @@ contains "default: merge allowed" "$(cat "$dflt/.claude/settings.local.json")" "
 out=$(python3 "$INIT" --repo "$dflt" --merge-method rebase)
 contains "method change: untouched agent updated" "$out" "updated   .claude/agents/demo-checker.md"
 contains "method change: rebase" "$(cat "$dflt/.claude/agents/demo-checker.md")" "\`gh pr merge <n> --rebase\`"
+method_text_checks "rebase method" "$dflt" rebase
 
 python3 "$INIT" --repo "$lead" --owner Sam --slug demo --merge-by lead --merge-method squash >/dev/null
 check "lead merges: config" "$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); print(c["mergeBy"], c["mergeMethod"])' "$lead/.claude/foreman.json")" "lead squash"
@@ -249,6 +278,7 @@ contains "lead merges: the lead merges" "$md" "**Merge discipline:** the lead me
 contains "lead merges: with the method" "$md" "before \`gh pr merge <n> --squash\`"
 contains "lead merges: one message per PR ready" "$md" "one message per PR ready or stop"
 check "lead merges: gh pr merge not allowed" "$(grep -c 'gh pr merge' "$lead/.claude/settings.local.json")" 0
+method_text_checks "squash method" "$lead" squash
 out=$(python3 "$INIT" --repo "$lead" --merge-by bot 2>&1)
 contains "bad mergeBy flag refused" "$out" "invalid choice: 'bot'"
 python3 - "$lead/.claude/foreman.json" <<'EOF'
@@ -288,5 +318,52 @@ check "compaction: emptied env dropped" "$(settings)" "{'autoCompactWindow': 300
 printf '{"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"500000"}}\n' >"$cw/.claude/settings.json"
 python3 "$INIT" --repo "$cw" >/dev/null
 check "compaction: a value of the repo's own stays" "$(settings)" "{'env': {'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '500000'}, 'autoCompactWindow': 300000}"
+
+# 15. The merge skill's text, and the check that the PR's head is the commit the full check named.
+# The skill is not rendered, so its wording is checked in the file.
+skill=$(cat "$KIT/plugin/skills/merge/SKILL.md")
+contains "merge skill: merge uses -d" "$skill" "- \`merge\`: \`git branch -d <branch>\`."
+contains "merge skill: squash and rebase use -D, for a merged PR" "$skill" "- \`squash\` or \`rebase\`: \`git branch -D <branch>\`, only after \`gh pr view <n> --json state,mergedAt\` shows \`state\` \`MERGED\` and a \`mergedAt\` that is not null."
+contains "merge skill: never on ancestry" "$skill" "Never decide on ancestry"
+contains "merge skill: a closed PR's branch is kept" "$skill" "keep the branch of a \`CLOSED\` PR"
+contains "merge skill: the -w branch keeps -d" "$skill" "\`git branch -d worktree-<task>\`"
+contains "merge skill: look before forcing" "$skill" "before forcing."
+check "merge skill: -D only on the squash or rebase line" "$(printf '%s\n' "$skill" | grep -c 'branch -D')" 1
+contains "merge skill: the PR head check expands the short sha" "$skill" "\`[ \"\$(gh pr view <n> --json headRefOid --jq .headRefOid)\" = \"\$(git rev-parse <sha>)\" ]\`"
+
+# fullcheck.sh prints an abbreviated sha and `gh pr view --json headRefOid` is all 40 characters, so
+# comparing the two as strings never matches. Every text that tells an agent to check the PR's head
+# must expand the short sha with git rev-parse. The scan has to see the sites first: a scan that
+# matches nothing looks like one that finds nothing.
+hits=$(grep -n headRefOid "$lead/CLAUDE.md" "$lead/.claude/agents/"*.md "$KIT/plugin/skills/"*/SKILL.md)
+check "PR head sites found: section, three agents, merge skill" "$([ "$(printf '%s\n' "$hits" | wc -l)" -ge 5 ] && echo yes)" yes
+check "every headRefOid line expands the sha with git rev-parse" "$(printf '%s\n' "$hits" | grep -v 'git rev-parse')" ""
+
+# The command from the rendered checker, run for real: the sha a real fullcheck.sh run printed, a
+# repo, and a stand-in `gh` that answers only the call the checker is told to make.
+out=$(cd "$lead" && OPS_AGENT_LOCKS="$lead/tmp/agent-locks" tools/foreman/fullcheck.sh 2>&1)
+short=$(printf '%s\n' "$out" | sed -n 's/^FULLCHECK: all green at \([0-9a-f]*\).*/\1/p')
+full=$(git -C "$lead" rev-parse HEAD)
+check "fullcheck.sh names an abbreviated sha" "$([ -n "$short" ] && [ "${#short}" -lt 40 ] && [ "${full#"$short"}" != "$full" ] && echo yes)" yes
+check "so comparing it with headRefOid as strings never matches" "$([ "$short" = "$full" ] && echo match || echo differ)" differ
+mkdir -p "$lead/tmp/fakebin"
+printf '%s\n' '#!/bin/bash' \
+  '[ "$*" = "pr view 7 --json headRefOid --jq .headRefOid" ] && { echo "$FAKE_HEAD"; exit 0; }' \
+  'exit 2' >"$lead/tmp/fakebin/gh"
+chmod +x "$lead/tmp/fakebin/gh"
+cmd=$(grep -o '\[ "\$(gh pr view <n> --json headRefOid[^`]*\]' "$lead/.claude/agents/demo-checker.md")
+check "the checker carries the command" "$([ -n "$cmd" ] && echo yes)" yes
+cmd=${cmd//<n>/7}
+cmd=${cmd//<sha>/$short}
+head_is() { (cd "$lead" && PATH="$lead/tmp/fakebin:$PATH" FAKE_HEAD="$1" bash -c "$cmd"); }
+head_is "$full"
+check "PR head is the checked commit: succeeds" "$?" 0
+git -C "$lead" commit -q --allow-empty -m "pushed after the check"
+head_is "$(git -C "$lead" rev-parse HEAD)"
+check "PR head moved past the checked commit: fails" "$?" 1
+head_is "$full"
+check "the short sha still names the checked commit: succeeds" "$?" 0
+head_is ""
+check "gh printing nothing: fails" "$?" 1
 
 exit $fail

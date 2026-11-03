@@ -350,6 +350,32 @@ def lanes_text(config):
     return "Lanes: " + ", ".join(out) + "."
 
 
+# Does the PR's head equal the commit the full check named? The FULLCHECK line prints an abbreviated sha
+# and `headRefOid` is all 40 characters, so comparing the two strings never matches. `git rev-parse`
+# expands the short one, whatever its length. The merge skill carries the same command; a test runs the
+# rendered one against a stand-in `gh`.
+PR_HEAD_CHECK = '[ "$(gh pr view <n> --json headRefOid --jq .headRefOid)" = "$(git rev-parse <sha>)" ]'
+
+
+def branch_cleanup(method, main):
+    """The "delete the branches" wording of the CLAUDE.md section, from `mergeMethod`. A squash or
+    rebase merge puts new commits on the main branch, so the PR branch never becomes their ancestor
+    and `git branch -d` always refuses. The branch is then deleted with `-D`, decided on the PR's
+    state and never on ancestry: a CLOSED PR's branch may hold the only copy of the work. The
+    `worktree-<task>` branch `claude --bg -w` made keeps `-d`, so a refusal there means commits that
+    are not on the main branch."""
+    if method == "merge":
+        return ("`git branch -d <branch>` for the merged branch and `git branch -d worktree-<task>` (the branch `-w` made). "
+                f"If either `-d` refuses, that branch holds commits that are not on `{main}`: look at them "
+                f"(`git log origin/{main}..<branch>`) before forcing.")
+    return (f"the PR branch with `git branch -D <branch>`, only after `gh pr view <n> --json state,mergedAt` shows "
+            f"`state` `MERGED` and a `mergedAt` that is not null (a {method} merge puts new commits on `{main}`, so the "
+            "branch is never their ancestor and `-d` always refuses; never decide on ancestry, and keep the branch of a "
+            "`CLOSED` PR: it may hold the only copy of the work). The `worktree-<task>` branch `-w` made, when it is "
+            f"not the PR branch, keeps `git branch -d`: if that refuses, it holds commits that are not on `{main}`, so "
+            f"look at them (`git log origin/{main}..worktree-<task>`) before forcing.")
+
+
 def merge_values(by, method):
     """The merge wording for the agent definitions and the CLAUDE.md section, from `mergeBy` and
     `mergeMethod`. With the lead merging (a review bot gates merges, say) agents stop at "PR ready";
@@ -357,6 +383,7 @@ def merge_values(by, method):
     cmd = f"gh pr merge <n> --{method}"
     if by == "agent":
         return {
+            "PR_HEAD_CHECK": PR_HEAD_CHECK,
             "MERGE_CMD": cmd,
             "MERGE_EVENT": "merge",
             "MERGE_OWNER": "agents merge their own PRs, and",
@@ -371,18 +398,22 @@ def merge_values(by, method):
             "CHECKER_RESULT": "merged or not",
         }
     return {
+        "PR_HEAD_CHECK": PR_HEAD_CHECK,
         "MERGE_CMD": cmd,
         "MERGE_EVENT": "PR ready",
         "MERGE_OWNER": "the lead merges (an agent reports its PR ready and never merges it), and",
         "MERGE_GATE": "reporting a PR ready",
-        "MERGE_ON_GREEN": "Report the PR ready only on `FULLCHECK: all green at <sha>` where `<sha>` is your branch head, pushed, and "
+        "MERGE_ON_GREEN": "Report the PR ready only on `FULLCHECK: all green at <sha>` where `<sha>` is your branch head, pushed "
+                          f"(the PR's head is `<sha>`: `{PR_HEAD_CHECK}` succeeds), and "
                           "`git merge-base --is-ancestor origin/main <sha>` holds after a `git fetch`. Never merge it yourself: "
                           "the lead merges. Never force-push main.",
         "MERGE_LINE": "one line when a PR is ready for the lead to merge",
         "CHECKER_ROLE": "reporting the PR ready when green",
         "CHECKER_ON_GREEN": "report its PR ready to the lead",
         "CHECKER_JOB": "check a PR for the lead to merge",
-        "CHECKER_STEP": "`git push`, confirm with `gh pr view <n> --json headRefOid` that the PR's head is `<sha>`. "
+        "CHECKER_STEP": f"`git push`, then confirm the PR's head is `<sha>` with `{PR_HEAD_CHECK}` (`<sha>` is abbreviated "
+                        "and `headRefOid` is all 40 characters, so the test expands `<sha>`: never compare the two strings). "
+                        "If it fails, the PR's head is not the commit that was checked: report that instead of ready. "
                         "Never merge: the lead does.",
         "CHECKER_RESULT": "ready or not",
     }
@@ -546,6 +577,7 @@ def main(argv=None):
     window = int(config.get("autoCompactWindow") or 0)
     has_check = bool(config.get("fullCheck") or config.get("checkCommand"))
     values["MAINBRANCH"] = config["mainBranch"]
+    values["BRANCH_CLEANUP"] = branch_cleanup(config["mergeMethod"], config["mainBranch"])
     values["COMPACT"] = f"{window // 1000}k tokens" if window > 0 else "off in this repo: the default window applies"
     values["ACCOUNTS_RULE"] = rule("accounts", values) if config.get("agentsAccount") else ""
     values["LANES_RULE"] = rule("lanes", values) if lanes_text(config).startswith("Lanes:") else rule("tracks", values)
