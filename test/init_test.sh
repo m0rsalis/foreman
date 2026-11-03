@@ -222,7 +222,7 @@ rm -rf "$full" "$old" "$oldkit"
 # files and their updates. `gh pr merge` is allowed without asking only where agents merge.
 dflt=$(make_repo)
 lead=$(make_repo)
-trap 'rm -rf "$repo" "$repo-wt" "${dry:-}" "${dflt:-}" "${lead:-}" "${cw:-}"' EXIT
+trap 'rm -rf "$repo" "$repo-wt" "${dry:-}" "${dflt:-}" "${lead:-}" "${cw:-}" "${tipr:-}" "${fakegh:-}"' EXIT
 # The CLAUDE.md section per mergeMethod. After a squash or rebase merge the PR branch is never an
 # ancestor of main, so `git branch -d` always refuses ("not fully merged"): the section says -D then,
 # but only for a PR that shows MERGED, never on ancestry (a CLOSED PR's branch may be the only copy).
@@ -230,6 +230,12 @@ trap 'rm -rf "$repo" "$repo-wt" "${dry:-}" "${dflt:-}" "${lead:-}" "${cw:-}"' EX
 # The clean-green test, pinned as the inventory repo tested it: it accepts "(0 of 2 steps cached)" and
 # "(2 of 2 steps cached)" and rejects the other three lines that start "all green at", and a FAILED line.
 clean_green="tail -n 1 <log> | grep -Eq '^FULLCHECK: all green at [0-9a-f]+ \\([0-9]+ of [0-9]+ steps cached\\)\$'"
+# The branch-delete test: -D only when this succeeds, i.e. the PR is MERGED and the branch's tip IS the head it
+# merged. The 0.4.1 text checked the PR's state alone, so a branch reused for a newer PR was force-deleted.
+tip_check=$(cat <<'EOF'
+tip="$(git rev-parse --verify -q refs/heads/<branch>)"; [ -n "$tip" ] && [ "$(gh pr view <n> --json state,mergedAt,headRefOid --jq 'select(.state == "MERGED" and .mergedAt != null) | .headRefOid')" = "$tip" ]
+EOF
+)
 method_text_checks() { # <label> <repo> <method>
   local label=$1 dir=$2 method=$3 md after
   md=$(cat "$dir/CLAUDE.md")
@@ -253,10 +259,17 @@ method_text_checks() { # <label> <repo> <method>
     contains "$label: the merged branch goes with -d" "$after" "\`git branch -d <branch>\` for the merged branch and \`git branch -d worktree-<task>\`"
     check "$label: no -D anywhere" "$(printf '%s' "$after" | grep -c 'branch -D')" 0
     check "$label: no PR state lookup" "$(printf '%s' "$after" | grep -c 'mergedAt')" 0
+    check "$label: no tip test (-d checks ancestry itself)" "$(printf '%s' "$after" | grep -c 'refs/heads/')" 0
   else
     contains "$label: the PR branch goes with -D" "$after" "the PR branch with \`git branch -D <branch>\`"
-    contains "$label: only for a merged PR" "$after" "only after \`gh pr view <n> --json state,mergedAt\` shows \`state\` \`MERGED\` and a \`mergedAt\` that is not null"
-    contains "$label: names the method" "$after" "(a $method merge puts new commits on \`main\`"
+    contains "$label: -D only when the tip test succeeds" "$after" "the PR branch with \`git branch -D <branch>\`, only when \`$tip_check\` succeeds"
+    contains "$label: ... the PR is merged and the tip is its head" "$after" "PR \`<n>\` shows \`state\` \`MERGED\` and a \`mergedAt\` that is not null, and the branch's local tip is the head that PR merged"
+    contains "$label: a branch that moved on is kept, and looked at" "$after" "a branch that moved past the merged head (reused for a newer PR, or committed to after the merge) all fail it: keep the branch and look at"
+    contains "$label: cleanup runs before the branch can be reused" "$after" "Run it right after the merge, before the branch can be reused, and in any later clean-up pass too"
+    hits=$(grep -n 'branch -D' "$dir/CLAUDE.md" "$dir/.claude/agents/"*.md)
+    check "$label: -D site found: the section" "$(printf '%s\n' "$hits" | wc -l | tr -d ' ')" 1
+    check "$label: every -D line carries the tip test" "$(printf '%s\n' "$hits" | grep -v 'refs/heads/<branch>')" ""
+    contains "$label: names the method" "$after" "(A $method merge puts new commits on \`main\`"
     contains "$label: never on ancestry" "$after" "never decide on ancestry"
     contains "$label: a closed PR's branch is kept" "$after" "keep the branch of a \`CLOSED\` PR"
     contains "$label: the -w branch keeps -d" "$after" "keeps \`git branch -d\`"
@@ -337,8 +350,12 @@ check "compaction: a value of the repo's own stays" "$(settings)" "{'env': {'CLA
 # The skill is not rendered, so its wording is checked in the file.
 skill=$(cat "$KIT/plugin/skills/merge/SKILL.md")
 contains "merge skill: merge uses -d" "$skill" "- \`merge\`: \`git branch -d <branch>\`."
-contains "merge skill: squash and rebase use -D, for a merged PR" "$skill" "- \`squash\` or \`rebase\`: \`git branch -D <branch>\`, only after \`gh pr view <n> --json state,mergedAt\` shows \`state\` \`MERGED\` and a \`mergedAt\` that is not null."
-contains "merge skill: never on ancestry" "$skill" "Never decide on ancestry"
+contains "merge skill: squash and rebase use -D, only when the tip test succeeds" "$skill" "- \`squash\` or \`rebase\`: \`git branch -D <branch>\`, only when \`$tip_check\` succeeds: PR \`<n>\` shows \`state\` \`MERGED\` and a \`mergedAt\` that is not null, and the branch's local tip is the head that PR merged"
+contains "merge skill: a branch that moved on is kept, and looked at" "$skill" "all fail it: keep the branch and look at \`git log origin/<mainBranch>..<branch>\` first"
+contains "merge skill: cleanup runs before the branch can be reused" "$skill" "Run it right after the merge, before the branch can be reused, and in any later clean-up pass too"
+contains "README: -D needs the branch tip to be the merged head" "$(cat "$KIT/README.md")" "and the branch's local tip is that \`headRefOid\` (a branch reused for a newer PR, or committed to after the merge, has moved past it and is kept)"
+contains "check-in skill: its disk pass is tip-tested" "$(cat "$KIT/plugin/skills/check-in/SKILL.md")" "A branch is deleted only by its tip test there: a branch that moved on since the merge is kept."
+contains "merge skill: never on ancestry" "$skill" "Never decide on ancestry, and keep the branch of a \`CLOSED\` PR."
 contains "merge skill: a closed PR's branch is kept" "$skill" "keep the branch of a \`CLOSED\` PR"
 contains "merge skill: the -w branch keeps -d" "$skill" "\`git branch -d worktree-<task>\`"
 contains "merge skill: look before forcing" "$skill" "before forcing."
@@ -353,7 +370,7 @@ contains "merge skill: the PR head check expands the short sha" "$skill" "\`[ \"
 # matches nothing looks like one that finds nothing.
 hits=$(grep -n headRefOid "$lead/CLAUDE.md" "$lead/.claude/agents/"*.md "$KIT/plugin/skills/"*/SKILL.md)
 check "PR head sites found: section, three agents, merge skill" "$([ "$(printf '%s\n' "$hits" | wc -l)" -ge 5 ] && echo yes)" yes
-check "every headRefOid line expands the sha with git rev-parse" "$(printf '%s\n' "$hits" | grep -v 'git rev-parse')" ""
+check "every headRefOid line expands the sha with git rev-parse <sha> (or is the branch-delete tip test)" "$(printf '%s\n' "$hits" | grep -v 'refs/heads/<branch>' | grep -v 'git rev-parse <sha>')" ""
 
 # The same two scans over the skills (the section and the agents are scanned per rendering above).
 hits=$(grep -n "all green at" "$KIT/plugin/skills/"*/SKILL.md)
@@ -389,5 +406,72 @@ head_is "$full"
 check "the short sha still names the checked commit: succeeds" "$?" 0
 head_is ""
 check "gh printing nothing: fails" "$?" 1
+
+# 16. The squash/rebase branch deletion, run for real: the tip test from the rendered section, in a repo,
+# against a stand-in `gh` that applies the command's own --jq filter (with jq) to canned PR JSON, and only
+# to the fields the command asked for, as gh does. Each case checks the test's exit status, and where it
+# succeeds the `git branch -D` that follows. The 0.4.1 rule (state and mergedAt alone) said delete for the
+# branch that had moved past the merged head; a missing branch plus a PR that prints nothing is the
+# absent-input bypass (two empty strings compare equal).
+if command -v jq >/dev/null; then
+  tipr=$(make_repo)
+  fakegh=$(mktemp -d "${TMPDIR:-/tmp}/foreman-fakegh.XXXXXX")
+  cat >"$fakegh/gh" <<'EOF'
+#!/bin/bash
+# gh pr view 7 --json <fields> --jq <filter>, answered from $FAKE_PR_JSON; any other call fails
+[ "$1 $2 $3 $4 $6" = "pr view 7 --json --jq" ] || exit 2
+[ -n "$FAKE_PR_JSON" ] || exit 1
+printf '%s' "$FAKE_PR_JSON" | jq -c --arg f "$5" '($f | split(",")) as $k | with_entries(select(.key as $x | $k | index($x)))' | jq -r "$7"
+EOF
+  chmod +x "$fakegh/gh"
+  cmd=$(grep -o 'tip="[^`]*' "$lead/CLAUDE.md")
+  check "the rendered section carries one tip test" "$(printf '%s\n' "$cmd" | wc -l | tr -d ' ')" 1
+  check "it is the pinned command" "$cmd" "$tip_check"
+  check "the merge skill carries the same command" "$(grep -o 'tip="[^`]*' "$KIT/plugin/skills/merge/SKILL.md")" "$cmd"
+  cmd=${cmd//<n>/7}
+  cmd=${cmd//<branch>/fix\/tip-test}
+  tree=$(git -C "$tipr" rev-parse 'HEAD^{tree}')
+  merged_head=$(git -C "$tipr" commit-tree -p HEAD -m "the PR's last commit" "$tree")
+  moved_on=$(git -C "$tipr" commit-tree -p "$merged_head" -m "committed after the merge" "$tree")
+  pr() { printf '{"state":"%s","mergedAt":%s,"headRefOid":"%s"}' "$1" "$2" "$3"; } # <state> <mergedAt json> <head>
+  at=\"2026-11-01T10:00:00Z\"
+  merged=$(pr MERGED "$at" "$merged_head")
+  tip_test() { (cd "$tipr" && PATH="$fakegh:$PATH" FAKE_PR_JSON="$1" bash -c "$cmd" 2>/dev/null); }
+  fate() { git -C "$tipr" rev-parse --verify -q refs/heads/fix/tip-test >/dev/null && echo kept || echo deleted; }
+
+  git -C "$tipr" branch -f fix/tip-test "$merged_head"
+  tip_test "$merged"
+  check "tip is the merged head: the test succeeds" "$?" 0
+  tip_test "$merged" && git -C "$tipr" branch -D fix/tip-test >/dev/null
+  check "... and the branch is deleted" "$(fate)" deleted
+
+  git -C "$tipr" branch -f fix/tip-test "$moved_on"
+  tip_test "$merged"
+  check "tip moved past the merged head: the test fails" "$?" 1
+  tip_test "$merged" && git -C "$tipr" branch -D fix/tip-test >/dev/null
+  check "... and the branch is kept, with the newer commit" "$(fate) $(git -C "$tipr" rev-parse refs/heads/fix/tip-test)" "kept $moved_on"
+
+  git -C "$tipr" branch -f fix/tip-test "$merged_head"
+  tip_test "$(pr OPEN null "$merged_head")"
+  check "PR still open, tip is its head: fails" "$?" 1
+  tip_test "$(pr CLOSED null "$merged_head")"
+  check "PR closed unmerged, tip is its head: fails" "$?" 1
+  tip_test "$(pr MERGED null "$merged_head")"
+  check "state MERGED but no mergedAt: fails" "$?" 1
+  tip_test "$(pr CLOSED "$at" "$merged_head")"
+  check "a mergedAt but state not MERGED: fails" "$?" 1
+  tip_test ""
+  check "gh failing: fails" "$?" 1
+  tip_test "$(pr MERGED "$at" "$moved_on")"
+  check "the merged head is not the tip: fails" "$?" 1
+
+  git -C "$tipr" branch -D fix/tip-test >/dev/null
+  tip_test "$merged"
+  check "branch missing, PR merged: fails" "$?" 1
+  tip_test "$(pr OPEN null "$merged_head")"
+  check "branch missing and gh prints nothing: fails (two empty strings are not a match)" "$?" 1
+else
+  echo "skip: jq is not installed, the branch-delete tip test was not run"
+fi
 
 exit $fail

@@ -14,5 +14,5 @@ The heartbeat session sends "check-in (heartbeat)" at :17 and :47. Keep it short
 5. **Briefs low**: a `LOW` lane or a `briefs low` / `pipeline empty` alert means write briefs (`/foreman:brief`) for defined items of that lane, or tell the owner there is nothing left to define.
 6. **Free slots**: if agents < `agentLimit`, start the next ready backlog item (`/foreman:start-agent`). The owner's `priority` beats `rank`; dependencies must be done; prefer work related to what is running. If the owner said priority one for something, do only that.
 7. **Locks**: a lock held far past its limit with a dead owner clears itself at the next waiter; never kill a queued job yourself.
-8. **Disk**: worktrees of merged branches go (`/foreman:merge`, the clean-up part).
+8. **Disk**: worktrees of merged branches go (`/foreman:merge`, the clean-up part). A branch is deleted only by its tip test there: a branch that moved on since the merge is kept.
 9. Checkpoint if anything changed (`/foreman:checkpoint`).

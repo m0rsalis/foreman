@@ -1,6 +1,6 @@
 {
   "name": "foreman",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A lead session with background agents: backlog, shared locks, model per difficulty, the Ops panel, and the setup and routines as skills",
   "author": { "name": "Filip Koňařík" },
   "types": "./types/index.d.ts"
