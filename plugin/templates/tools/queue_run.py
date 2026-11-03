@@ -34,6 +34,9 @@ def main():
     name, minutes, cmd = sys.argv[1], float(sys.argv[2]), sys.argv[3:]
     stopped = []
 
+    # An argv list, no shell. The command is the caller's own (`queue.sh <lock> <command...>` from an
+    # agent, or fullcheck.sh with a step from the repo's tracked config); this script adds only the
+    # time limit and the process group, so it is no trust boundary.
     try:
         proc = subprocess.Popen(cmd, start_new_session=True)
     except OSError as e:

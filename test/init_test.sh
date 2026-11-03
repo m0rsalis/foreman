@@ -217,4 +217,76 @@ else
 fi
 rm -rf "$full" "$old" "$oldkit"
 
+# 13. Who merges and how (mergeBy, mergeMethod): settings the agent files and the section are
+# rendered from, so a repo whose lead merges (a review bot gates merges) keeps the kit's agent
+# files and their updates. `gh pr merge` is allowed without asking only where agents merge.
+dflt=$(make_repo)
+lead=$(make_repo)
+trap 'rm -rf "$repo" "$repo-wt" "${dry:-}" "${dflt:-}" "${lead:-}" "${cw:-}"' EXIT
+python3 "$INIT" --repo "$dflt" --owner Sam --slug demo >/dev/null
+for f in engineer implementer checker; do
+  contains "default: $f merges with --merge" "$(cat "$dflt/.claude/agents/demo-$f.md")" "\`gh pr merge <n> --merge\`"
+done
+contains "default: one line after each merge" "$(cat "$dflt/.claude/agents/demo-engineer.md")" "SendMessage only: one line after each merge;"
+md=$(cat "$dflt/CLAUDE.md")
+contains "default: agents merge" "$md" "**Merge discipline:** agents merge their own PRs, and only on"
+contains "default: one message per merge" "$md" "one message per merge or stop"
+contains "default: merge allowed" "$(cat "$dflt/.claude/settings.local.json")" "\"Bash(gh pr merge:*)\""
+out=$(python3 "$INIT" --repo "$dflt" --merge-method rebase)
+contains "method change: untouched agent updated" "$out" "updated   .claude/agents/demo-checker.md"
+contains "method change: rebase" "$(cat "$dflt/.claude/agents/demo-checker.md")" "\`gh pr merge <n> --rebase\`"
+
+python3 "$INIT" --repo "$lead" --owner Sam --slug demo --merge-by lead --merge-method squash >/dev/null
+check "lead merges: config" "$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); print(c["mergeBy"], c["mergeMethod"])' "$lead/.claude/foreman.json")" "lead squash"
+for f in engineer implementer checker; do
+  check "lead merges: $f never runs gh pr merge" "$(grep -c 'gh pr merge' "$lead/.claude/agents/demo-$f.md")" 0
+done
+contains "lead merges: engineer stops at ready" "$(cat "$lead/.claude/agents/demo-engineer.md")" "Report the PR ready only on \`FULLCHECK: all green at <sha>\`"
+contains "lead merges: implementer reports ready" "$(cat "$lead/.claude/agents/demo-implementer.md")" "SendMessage only: one line when a PR is ready for the lead to merge;"
+contains "lead merges: checker job" "$(cat "$lead/.claude/agents/demo-checker.md")" "## Typical job: check a PR for the lead to merge"
+md=$(cat "$lead/CLAUDE.md")
+contains "lead merges: the lead merges" "$md" "**Merge discipline:** the lead merges (an agent reports its PR ready and never merges it), and only on"
+contains "lead merges: with the method" "$md" "before \`gh pr merge <n> --squash\`"
+contains "lead merges: one message per PR ready" "$md" "one message per PR ready or stop"
+check "lead merges: gh pr merge not allowed" "$(grep -c 'gh pr merge' "$lead/.claude/settings.local.json")" 0
+out=$(python3 "$INIT" --repo "$lead" --merge-by bot 2>&1)
+contains "bad mergeBy flag refused" "$out" "invalid choice: 'bot'"
+python3 - "$lead/.claude/foreman.json" <<'EOF'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); d["mergeMethod"] = "fast-forward"; json.dump(d, open(p, "w"))
+EOF
+out=$(python3 "$INIT" --repo "$lead" 2>&1)
+contains "bad mergeMethod in the config refused" "$out" "mergeMethod 'fast-forward' in .claude/foreman.json must be one of merge, squash, rebase"
+
+# Previews: an agent's sandbox cannot write the main checkout, so it keeps them in its own
+# worktree's tmp/previews/ (ignored, so its full check stays clean) and the lead copies them out.
+check "previews folder ignored" "$(git -C "$dflt" check-ignore -q tmp/previews/x && echo yes)" yes
+contains "previews: the lead copies them" "$(cat "$dflt/CLAUDE.md")" "the lead copies them into \`tmp/previews\` in the main checkout"
+contains "previews: the agent keeps them" "$(cat "$dflt/.claude/agents/demo-engineer.md")" "go in your worktree's own \`tmp/previews/\`"
+check "launch command is no pipeline" "$(grep -c 'engineer|' "$dflt/CLAUDE.md")" 0
+contains "launch command names the tiers" "$(cat "$dflt/CLAUDE.md")" "--agent <tier> --permission-mode auto"
+
+# 14. The compaction window is autoCompactWindow alone: CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks
+# --autocompact, so with it no task could get a bigger window. Never written; the value earlier
+# kits wrote is removed (an emptied env with it); a value of the repo's own stays.
+cw=$(make_repo)
+settings() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])))' "$cw/.claude/settings.json"; }
+python3 "$INIT" --repo "$cw" >/dev/null
+check "compaction: only the key" "$(settings)" "{'autoCompactWindow': 300000}"
+# A repo that deleted the variable by hand: a rerun must not bring it back.
+printf '{"autoCompactWindow":300000}\n' >"$cw/.claude/settings.json"
+python3 "$INIT" --repo "$cw" >/dev/null
+check "compaction: a rerun adds no variable" "$(settings)" "{'autoCompactWindow': 300000}"
+contains "compaction: the section says --autocompact" "$(cat "$cw/CLAUDE.md")" "gets \`--autocompact <size>\` (\`500k\`, say) on its launch command"
+printf '{"autoCompactWindow":300000,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"300000","FOO":"1"}}\n' >"$cw/.claude/settings.json"
+out=$(python3 "$INIT" --repo "$cw")
+contains "compaction: earlier kit's variable removed" "$out" "updated   .claude/settings.json  (removed env.CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+check "compaction: other env kept" "$(settings)" "{'autoCompactWindow': 300000, 'env': {'FOO': '1'}}"
+printf '{"autoCompactWindow":300000,"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"300000"}}\n' >"$cw/.claude/settings.json"
+python3 "$INIT" --repo "$cw" >/dev/null
+check "compaction: emptied env dropped" "$(settings)" "{'autoCompactWindow': 300000}"
+printf '{"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"500000"}}\n' >"$cw/.claude/settings.json"
+python3 "$INIT" --repo "$cw" >/dev/null
+check "compaction: a value of the repo's own stays" "$(settings)" "{'env': {'CLAUDE_CODE_AUTO_COMPACT_WINDOW': '500000'}, 'autoCompactWindow': 300000}"
+
 exit $fail

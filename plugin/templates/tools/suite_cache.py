@@ -109,6 +109,10 @@ def machine(config, step, top):
     extra = config.get('checkCache') if isinstance(config.get('checkCache'), dict) else {}
     cmds = [c for c in (extra.get('machine') or []) if isinstance(c, str)]
     cmds += [c for c in ((step['cache'] or {}).get('fingerprint') or []) if isinstance(c, str)]
+    # shell=True on purpose: these are command lines from the repo's own tracked config
+    # (.claude/foreman.json, reviewed like a Makefile), and one may pipe or quote, which an argv
+    # list would break. Whoever can edit that file already sets the full check's commands, which
+    # fullcheck.sh runs with bash -c; no input from outside the repo reaches this call.
     return '\n'.join(['uname ' + ' '.join(os.uname()[i] for i in (0, 2, 4))] + [f'{c} => ' + run(c, cwd=top, shell=True) for c in cmds])
 
 

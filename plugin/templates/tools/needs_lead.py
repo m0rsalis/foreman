@@ -14,6 +14,13 @@ With agentsAccount set (.claude/foreman.json) agents run on a second account
 (claude-agents.sh): each account's background service lists only its own
 sessions, so both lists are read.
 
+Only this repo's background sessions count: both lists and the session
+registry hold every session on the machine, other repos' agents and
+heartbeats and interactive sessions (the lead, the owner's own) included. A
+session counts when its cwd is the main checkout or one of its worktrees
+(lead_status.in_repo) and, in the lists, when it has a state (interactive
+sessions have none).
+
 Stalls: with one report per stop a quiet agent
 is normal, so a stuck one is found here, from the session registry
 (~/.claude/sessions/<pid>.json: status busy/idle, statusUpdatedAt in ms) and the
@@ -57,10 +64,11 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True  # a __pycache__ here would dirty the checkout and turn the suite cache off
 sys.path.insert(0, HERE)
-from lead_status import pipeline, pipeline_alerts  # noqa: E402  (one rule for both tools)
+from lead_status import in_repo, pipeline, pipeline_alerts, repo_paths  # noqa: E402  (one rule for both tools)
 import ops_config  # noqa: E402
 
 ROOT = ops_config.main_checkout()
+REPO_PATHS = repo_paths(ROOT)
 OPS = os.path.join(ROOT, 'tmp', 'ops')
 AGENTS_CLAUDE = os.path.join(HERE, 'claude-agents.sh')
 
@@ -193,7 +201,7 @@ def stalls(now):
             pid, name = int(s['pid']), s['name']
         except Exception:
             continue
-        if s.get('kind') not in ('bg', 'background') or name.startswith(IGNORED):
+        if s.get('kind') not in ('bg', 'background') or name.startswith(IGNORED) or not in_repo(s.get('cwd'), REPO_PATHS):
             continue
         if not faked:
             try:
@@ -258,11 +266,9 @@ def snapshot(backlog):
     snap = {}
     for a in agents:
         name = a.get('name') or a.get('id')
-        if not name or name.startswith(IGNORED):
-            continue
-        # Interactive sessions appear in both lists (the shared registry) without
-        # a state; a background session appears once, with its state.
-        if 'agent ' + name in snap and not a.get('state'):
+        # Interactive sessions have no state (and appear in both accounts' lists):
+        # the owner opening or closing one is no reason to wake the lead.
+        if not name or name.startswith(IGNORED) or not a.get('state') or not in_repo(a.get('cwd'), REPO_PATHS):
             continue
         # state (working, done, stopped) and whether a process is alive; the
         # busy/idle status flips all the time and is left out on purpose.
@@ -333,6 +339,8 @@ def main_check(old):
     queue = os.path.join(locks, 'locks', 'check.queue')
     if os.path.exists(os.path.join(locks, 'locks', 'check.lock')) or (os.path.isdir(queue) and os.listdir(queue)):
         return alerts, state
+    # An argv list, no shell: main_fullcheck.sh beside this file, or a test's stand-in from
+    # NEEDS_LEAD_MAIN_CMD, which only whoever runs this script can set.
     try:
         subprocess.Popen([cmd], cwd=root, start_new_session=True, stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -11,10 +11,12 @@ description: Start a background agent for a ready backlog item in a repo using F
 4. **Start it from the main checkout** (settings from `.claude/foreman.json`: `slug`, `lead`, `heartbeatName`). With `agentsAccount` set, replace `claude` by `<toolsDir>/claude-agents.sh` in this command and in every `claude agents/stop/rm/--resume` call: agents run on the second account so their usage limit is not the lead's.
 
 ```bash
-claude --bg -w <task> --agent <slug>-<tier> --permission-mode auto --name <task> "Your brief is <main checkout>/tmp/ops/briefs/<task>.md: read it first and follow it. tmp/ paths mean the main checkout's tmp/ (<main checkout>/tmp). Work only in your worktree. Report to the lead's session '<lead>' by SendMessage only: one line per merge, a hand-back line before stopping on a usage limit, then the final report. If the lead is unreachable, send it to '<heartbeatName>' and carry on. Run long commands in the background. No sub-agents."
+claude --bg -w <task> --agent <slug>-<tier> --permission-mode auto --name <task> "Your brief is <main checkout>/tmp/ops/briefs/<task>.md: read it first and follow it. tmp/ paths mean the main checkout's tmp/ (<main checkout>/tmp), except previews: save those in your worktree's own tmp/previews/ and name each path in your report. Work only in your worktree. Report to the lead's session '<lead>' by SendMessage only: one line per merge, a hand-back line before stopping on a usage limit, then the final report. If the lead is unreachable, send it to '<heartbeatName>' and carry on. Run long commands in the background. No sub-agents."
 ```
 
    - `<tier>`: `engineer` (Opus), `implementer` (Sonnet), `checker` (Haiku), as the brief says.
+   - With `mergeBy` set to `lead` in `.claude/foreman.json`, the agent never merges: write "one line when a PR is ready" instead of "one line per merge".
+   - A task that must hold more context at once (the brief says why): add `--autocompact <size>`, `500k` say, over the repo's `autoCompactWindow`. The docs do not say whether `claude --bg` honours it. Never `/autocompact <size>`: it saves to user settings, every repo.
    - Work outside this repo: add `--add-dir <path>`. A test session: add `--model haiku` and a one-line job; stop and remove it yourself after.
    - Continuing in an existing worktree instead of a new one: drop `-w`, and say in the message "Your worktree is <path>; work only there".
 5. **Record:** `claude agents --json --all` gives the new session's `id` and `sessionId`. Add the agent to status.json (`kind: "bg"`, `sessionName`, the full `sessionId`, `model`, `agent`, `worktree`, `branch`, `step`, `startedAt`, `backlog`), set the backlog item `in_progress` with `agent`. Checkpoint.

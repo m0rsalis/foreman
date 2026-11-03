@@ -74,13 +74,13 @@ It asks once for the owner's name, the lead session's name, the agent cap, the f
 | `CLAUDE.md` | The rules, between `<!-- foreman:begin -->` and `<!-- foreman:end -->`; the rest of the file is yours | The section: same |
 | `.claude/foreman-files.json` | What the init wrote last (how it knows what you edited) | Kept in step |
 | `tmp/ops/` (main checkout) | `status.json`, `backlog.json`, `lead-notes.md`, `briefs/`, `reports/` | Never rewritten |
-| `.gitignore` | `/tmp/ops/`, `/tmp/agent-locks/`, `/tmp/logs/`, `/.claude/settings.local.json`, `/.claude/worktrees/` unless already ignored | Added once |
-| `.claude/settings.json` | Only keys that are missing: `autoCompactWindow`, `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW`, and with `--usage` the `statusLine` | Missing keys added; yours kept |
-| `.claude/settings.local.json` (main checkout) | Permission entries: `claude --bg`, `claude agents/logs/stop/rm`, `SendMessage`, git fetch/pull/push/switch/checkout/branch/merge/worktree, `gh pr create/merge/view/list`, the queue, check and status scripts | Missing entries added; nothing removed; hooks untouched |
+| `.gitignore` | `/tmp/ops/`, `/tmp/agent-locks/`, `/tmp/logs/`, `/tmp/previews/`, `/.claude/settings.local.json`, `/.claude/worktrees/` unless already ignored | Added once |
+| `.claude/settings.json` | Only keys that are missing: `autoCompactWindow`, and with `--usage` the `statusLine` | Missing keys added; yours kept. An `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW` holding the value kits before 0.4.0 wrote is removed: it outranks `--autocompact` |
+| `.claude/settings.local.json` (main checkout) | Permission entries: `claude --bg`, `claude agents/logs/stop/rm`, `SendMessage`, git fetch/pull/push/switch/checkout/branch/merge/worktree, `gh pr create/view/list`, `gh pr merge` when agents merge (`mergeBy`), the queue, check and status scripts | Missing entries added; nothing removed; hooks untouched |
 
 A file you edited is never overwritten: the kit's new version goes to `tmp/ops/init-pending/<path>` and the init says so; the skill shows you the diff and asks. `--force <path>` takes the kit's version.
 
-Note that the permission entries let agents push branches and merge PRs without asking each time. That is the point (agents merge their own PRs on a green full check), but read the list before you accept it, and drop `Bash(git push:*)` or `Bash(gh pr merge:*)` if you want to merge by hand.
+Note that the permission entries let agents push branches and merge PRs without asking each time. That is the point (agents merge their own PRs on a green full check), but read the list before you accept it. To merge by hand, or where a review bot gates merges, set `mergeBy` to `lead` (`--merge-by lead`): agents then stop at a green, pushed PR and report it ready, and the init no longer adds `Bash(gh pr merge:*)` (it never removes an entry, so drop one an earlier run added). `mergeMethod` (`--merge-method squash`) follows a ruleset that allows only squash or rebase.
 
 ## Settings: `.claude/foreman.json`
 
@@ -110,16 +110,17 @@ Shared (commit it). `tmp/ops/config.json`, if present, overrides any key on this
 | `mainBranch`, `mainCheck` | detected from `origin/HEAD`, true | The branch the forced main check runs on; whether `needs_lead.py` watches it |
 | `lanes` | none | `[{"id", "label", "cap", "owns": [paths], "minReady"}]`; `lanes` in `tmp/ops/backlog.json` wins. `minReady` defaults to 2 (0 for `flex`) |
 | `agentsAccount`, `claude`, `accounts` | false, `claude`, none | Background agents on a second account (`tools/foreman/claude-agents.sh`); the `claude` command to use |
-| `usage`, `autoCompactWindow` | false, 300000 | The usage gauges and their status line; the auto-compact window written to `.claude/settings.json` |
+| `usage`, `autoCompactWindow` | false, 300000 | The usage gauges and their status line; the auto-compact window written to `.claude/settings.json` (a task that needs more gets `--autocompact <size>` on its launch command) |
+| `mergeBy`, `mergeMethod` | `agent`, `merge` | Who merges a PR on a green full check: `agent` (each agent merges its own) or `lead` (agents report the PR ready; the lead merges). The method: `merge`, `squash` or `rebase` (`gh pr merge --<method>`) |
 
-Rerun `/foreman:init` after changing `owner`, `lead`, `slug`, `locks` or the check, so the CLAUDE.md section and the agent files follow.
+Rerun `/foreman:init` after changing `owner`, `lead`, `slug`, `locks`, `mergeBy`, `mergeMethod`, `previews` or the check, so the CLAUDE.md section and the agent files follow.
 
 ## A day in the life
 
 1. **The owner describes a feature** in the lead session. The lead asks what it needs to know (one theme at a time, each question with a recommendation) and writes the item into `tmp/ops/backlog.json`: status `defined`, a rank, dependencies.
 2. **The lead writes the brief** (`/foreman:brief`): the owner's words, files to read, state inherited, what to build, tests, branch, report format. The item turns `ready`. The panel shows it with a `next` chip when it is first in line.
 3. **A slot opens** (agents under the cap): the lead picks the best ready item (the owner's priority beats the lead's rank; dependencies done) and starts an agent (`/foreman:start-agent`): `claude --bg -w <task> --agent <slug>-engineer ...`. A card appears on the panel.
-4. **The agent builds** in its worktree, runs `fullcheck.sh` (queued behind the others), merges on green and messages the lead one line per merge. Things only the owner can judge (a look, a decision) go into `status.json` as sign-off items and show under "Waiting for <owner>".
+4. **The agent builds** in its worktree, runs `fullcheck.sh` (queued behind the others), merges on green and messages the lead one line per merge (with `mergeBy: "lead"` it reports the PR ready instead, and the lead merges). Things only the owner can judge (a look, a decision) go into `status.json` as sign-off items and show under "Waiting for <owner>".
 5. **The lead merges and cleans up** (`/foreman:merge`): files the report, marks the item done, stops and removes the session and its worktree, deletes the branch, fills the slot.
 6. **Every 30 minutes the heartbeat checks in** (`/foreman:check-in`): revives agents a usage limit stopped, nudges stalled ones, fills free slots. At every change the lead checkpoints (`/foreman:checkpoint`) so a fresh session can restore (`/foreman:restore`).
 
