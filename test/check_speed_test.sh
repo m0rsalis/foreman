@@ -47,17 +47,26 @@ fc() { (cd "$repo" && "$FC" >"$fa/out" 2>&1); code=$?; tail -1 "$fa/out"; return
 made() { if [ -f "$FA_MADE" ]; then tr '\n' ' ' <"$FA_MADE"; fi; }
 sha() { gitc rev-parse --short HEAD; }
 commit() { gitc add -A && gitc commit -qm "$1"; }
+# Four lines start "FULLCHECK: all green at <sha>" and only the clean one vouches for the commit. The
+# agents and the lead test the log with the command in the rendered checker; it must accept the clean
+# line and reject the others, run here on the real output of each.
+clean_green=$(grep -o "tail -n 1 <log> | grep -Eq '[^']*'" "$repo/.claude/agents/demo-checker.md")
+check "the rendered checker carries the clean-green command" "$([ -n "$clean_green" ] && echo yes)" yes
+clean_green=${clean_green//<log>/$fa/out}
+verdict() { if bash -c "$clean_green"; then echo accepted; else echo rejected; fi; }
 
 # The first run runs everything; the same commit again runs only the uncacheable step.
 s=$(sha)
 out=$(fc); code=$?
 check "first run: line names the commit" "$out" "FULLCHECK: all green at $s (0 of 3 steps cached)"
 check "first run: exit code" "$code" 0
+check "first run: the clean-green command accepts it" "$(verdict)" accepted
 check "first run: every step ran" "$(made)" "lint unit act "
 rm -f "$FA_MADE"
 out=$(fc)
 check "same commit: only the step without a cache ran" "$out $(made)" "FULLCHECK: all green at $s (2 of 3 steps cached) act "
 contains "cached steps are named" "$(cat "$fa/out")" "STEP lint cached"
+check "same commit: the clean-green command accepts a partly cached run" "$(verdict)" accepted
 check "checks.jsonl has commit, clean and cached" "$(tail -1 "$fa/checks.jsonl" | grep -c "\"commit\":\"$s\",\"clean\":true.*\"cached\":2")" 1
 check "steps.jsonl lists the cached steps" "$(tail -1 "$fa/steps.jsonl" | grep -c '"cached":\["lint","unit"\]')" 1
 
@@ -106,6 +115,7 @@ echo b >>"$repo/src/code.txt"; commit src2
 echo dirty >>"$repo/tracked.txt"
 out=$(fc)
 check "dirty tree: line says so, nothing cached" "$out $(made)" "FULLCHECK: all green at $(sha) + uncommitted changes (0 of 3 steps cached) lint unit act "
+check "dirty tree: the clean-green command rejects it" "$(verdict)" rejected
 gitc checkout -q tracked.txt
 rm -f "$FA_MADE"
 out=$(fc)
@@ -129,6 +139,7 @@ EOF
 commit flaky
 out=$(FA_FAIL=1 fc); code=$?
 check "failure: the line names the part" "$out" "FULLCHECK: flaky FAILED"
+check "failure: the clean-green command rejects it" "$(verdict)" rejected
 check "failure: exit code" "$([ "$code" -ne 0 ] && echo nonzero || echo zero)" nonzero
 check "failure: checks.jsonl says failed" "$(tail -1 "$fa/checks.jsonl" | grep -c '"result":"failed","part":"flaky"')" 1
 out=$(fc)
@@ -139,11 +150,13 @@ now0=$(sha)
 out=$(FORCE_ALL=1 FA_ACTION=commit fc); code=$?
 check "HEAD moved: line" "$out" "FULLCHECK: all green at $now0, but HEAD is now $(sha): rerun before merging"
 check "HEAD moved: exit code" "$([ "$code" -ne 0 ] && echo nonzero || echo zero)" nonzero
+check "HEAD moved: the clean-green command rejects it" "$(verdict)" rejected
 now0=$(sha)
 out=$(FORCE_ALL=1 FA_ACTION=edit fc); code=$?
 case "$out" in "FULLCHECK: all green at $now0, but the working tree changed"*) r=yes ;; *) r="no ($out)" ;; esac
 check "tree changed: line" "$r" yes
 check "tree changed: exit code" "$([ "$code" -ne 0 ] && echo nonzero || echo zero)" nonzero
+check "tree changed: the clean-green command rejects it" "$(verdict)" rejected
 gitc checkout -q tracked.txt
 
 # A step that says it ran nothing real (a gated step) is not recorded.
