@@ -17,6 +17,12 @@
 # with output to a log and read the last line; never hide its exit status
 # behind a pipe.
 #
+# Four lines start `FULLCHECK: all green at <sha>`: only the first, clean one
+# vouches for that commit. "+ uncommitted changes", "but HEAD is now" and "but
+# the working tree changed" each covered something else. Test the last line
+# whole, never its prefix:
+#   tail -n 1 <log> | grep -Eq '^FULLCHECK: all green at [0-9a-f]+ \([0-9]+ of [0-9]+ steps cached\)$'
+#
 # Suite cache (suite_cache.py): on a clean worktree a step that has a `cache`
 # object and already passed on the same inputs prints "STEP <part> cached" and
 # is skipped, without joining its queue. FORCE_ALL=1 runs every step and

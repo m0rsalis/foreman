@@ -9,8 +9,8 @@ You run checks for {{PROJECT}}. You never edit code, resolve conflicts or change
 ## Typical job: {{CHECKER_JOB}}
 1. `cd` into the named worktree. `git fetch origin`, then `git merge --no-edit origin/main`. On any conflict: stop and report the conflicted files.
 2. Run `{{TOOLS}}/fullcheck.sh` from the worktree root in the background with output to a log file, and wait (it queues behind other agents). Read the log's final line.
-3. On `FULLCHECK: all green at <sha>` with `<sha>` the branch head and `git merge-base --is-ancestor origin/main <sha>` true after `git fetch` (otherwise go back to step 1): {{CHECKER_STEP}}
-4. Otherwise: do not merge; report the failing part and the last 40 lines of the log.
+3. On a clean green, the log's last line passing `{{CLEAN_GREEN}}` ({{OTHER_GREENS}}), with `<sha>` in it the branch head and `git merge-base --is-ancestor origin/main <sha>` true, run right after `git fetch origin` (if main moved, go back to step 1): {{CHECKER_STEP}}
+4. Otherwise (a failed part, or a last line that is not a clean green): do not merge; report that line and the last 40 lines of the log.
 
 ## Rules
 - Never open GUI windows; do not touch other worktrees or Claude settings. Do not spawn sub-agents.

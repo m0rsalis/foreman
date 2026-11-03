@@ -356,6 +356,15 @@ def lanes_text(config):
 # rendered one against a stand-in `gh`.
 PR_HEAD_CHECK = '[ "$(gh pr view <n> --json headRefOid --jq .headRefOid)" = "$(git rev-parse <sha>)" ]'
 
+# Four lines start `FULLCHECK: all green at <sha>`, and one vouches for that commit: the clean one.
+# The other three ("+ uncommitted changes", ", but HEAD is now <sha>", ", but the working tree changed
+# during the run") covered something other than the commit, and a prefix match accepts them. The texts
+# that act on the line run this command on the log's last line instead. check_speed_test.sh runs the
+# rendered command against the real output of every form.
+CLEAN_GREEN = r"tail -n 1 <log> | grep -Eq '^FULLCHECK: all green at [0-9a-f]+ \([0-9]+ of [0-9]+ steps cached\)$'"
+OTHER_GREENS = ("the other lines that start `FULLCHECK: all green at` are not clean: `+ uncommitted changes`, "
+                "`, but HEAD is now <sha>` and `, but the working tree changed during the run` each covered something other than that commit")
+
 
 def branch_cleanup(method, main):
     """The "delete the branches" wording of the CLAUDE.md section, from `mergeMethod`. A squash or
@@ -384,12 +393,15 @@ def merge_values(by, method):
     if by == "agent":
         return {
             "PR_HEAD_CHECK": PR_HEAD_CHECK,
+            "CLEAN_GREEN": CLEAN_GREEN,
+            "OTHER_GREENS": OTHER_GREENS,
             "MERGE_CMD": cmd,
             "MERGE_EVENT": "merge",
             "MERGE_OWNER": "agents merge their own PRs, and",
             "MERGE_GATE": "every merge",
-            "MERGE_ON_GREEN": "Merge only on `FULLCHECK: all green at <sha>` where `<sha>` is your branch head and "
-                              f"`git merge-base --is-ancestor origin/main <sha>` holds after a `git fetch` (`{cmd}`; never force-push main).",
+            "MERGE_ON_GREEN": f"Merge only on a clean green: the log's last line passes `{CLEAN_GREEN}` ({OTHER_GREENS}), "
+                              "`<sha>` in it is your branch head, and `git merge-base --is-ancestor origin/main <sha>` holds, "
+                              f"run right after `git fetch origin` (`{cmd}`; never force-push main).",
             "MERGE_LINE": "one line after each merge",
             "CHECKER_ROLE": "merging when green",
             "CHECKER_ON_GREEN": "merge its PR",
@@ -399,13 +411,15 @@ def merge_values(by, method):
         }
     return {
         "PR_HEAD_CHECK": PR_HEAD_CHECK,
+        "CLEAN_GREEN": CLEAN_GREEN,
+        "OTHER_GREENS": OTHER_GREENS,
         "MERGE_CMD": cmd,
         "MERGE_EVENT": "PR ready",
         "MERGE_OWNER": "the lead merges (an agent reports its PR ready and never merges it), and",
         "MERGE_GATE": "reporting a PR ready",
-        "MERGE_ON_GREEN": "Report the PR ready only on `FULLCHECK: all green at <sha>` where `<sha>` is your branch head, pushed "
-                          f"(the PR's head is `<sha>`: `{PR_HEAD_CHECK}` succeeds), and "
-                          "`git merge-base --is-ancestor origin/main <sha>` holds after a `git fetch`. Never merge it yourself: "
+        "MERGE_ON_GREEN": f"Report the PR ready only on a clean green: the log's last line passes `{CLEAN_GREEN}` ({OTHER_GREENS}), "
+                          f"`<sha>` in it is your branch head, pushed (the PR's head is `<sha>`: `{PR_HEAD_CHECK}` succeeds), and "
+                          "`git merge-base --is-ancestor origin/main <sha>` holds, run right after `git fetch origin`. Never merge it yourself: "
                           "the lead merges. Never force-push main.",
         "MERGE_LINE": "one line when a PR is ready for the lead to merge",
         "CHECKER_ROLE": "reporting the PR ready when green",

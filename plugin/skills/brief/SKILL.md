@@ -15,7 +15,7 @@ A background agent starts with nothing but its brief, `CLAUDE.md` and its agent 
 4. **State inherited:** what exists, what earlier PRs did, branches or worktrees to continue from, anything half done.
 5. **Build:** what to make, as concrete as the decisions allow. OPEN questions the agent may meet, each with a proposed default it should use and report.
 6. **Tests:** what proves it works; each new test must fail without the change.
-7. **Git:** branch names, one PR per milestone, the full check (`<toolsDir>/fullcheck.sh`) before each merge, merge only when `git merge-base --is-ancestor origin/<mainBranch> <green sha>` holds (with `mergeBy` set to `lead`: report the PR ready then, never merge), merge order if another PR is close.
+7. **Git:** branch names, one PR per milestone, the full check (`<toolsDir>/fullcheck.sh`) before each merge, merge only on a clean green (`/foreman:merge` has the exact test) and when `git fetch origin` immediately before `git merge-base --is-ancestor origin/<mainBranch> <green sha>` shows it holds (with `mergeBy` set to `lead`: report the PR ready then, never merge), merge order if another PR is close.
 8. **Not in scope:** what it must not touch.
 9. **Report:** to the lead by name (`lead` in `.claude/foreman.json`) by SendMessage only (one message at the merge for a one-stage brief, then stop; otherwise a line per merge; with `mergeBy` set to `lead`, at PR ready instead of at the merge), a hand-back line before stopping on a usage limit, a short final report (PRs, evidence, previews for the owner saved in its worktree's `tmp/previews/`, each path named, open questions).
 

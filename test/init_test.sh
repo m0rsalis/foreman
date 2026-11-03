@@ -227,11 +227,25 @@ trap 'rm -rf "$repo" "$repo-wt" "${dry:-}" "${dflt:-}" "${lead:-}" "${cw:-}"' EX
 # ancestor of main, so `git branch -d` always refuses ("not fully merged"): the section says -D then,
 # but only for a PR that shows MERGED, never on ancestry (a CLOSED PR's branch may be the only copy).
 # The `worktree-<task>` branch `claude --bg -w` made keeps -d, and -d refusing means unmerged commits.
+# The clean-green test, pinned as the inventory repo tested it: it accepts "(0 of 2 steps cached)" and
+# "(2 of 2 steps cached)" and rejects the other three lines that start "all green at", and a FAILED line.
+clean_green="tail -n 1 <log> | grep -Eq '^FULLCHECK: all green at [0-9a-f]+ \\([0-9]+ of [0-9]+ steps cached\\)\$'"
 method_text_checks() { # <label> <repo> <method>
   local label=$1 dir=$2 method=$3 md after
   md=$(cat "$dir/CLAUDE.md")
   after=$(grep '^- \*\*After a merge' "$dir/CLAUDE.md")
   contains "$label: the PR head check expands the short sha" "$md" "\`[ \"\$(gh pr view <n> --json headRefOid --jq .headRefOid)\" = \"\$(git rev-parse <sha>)\" ]\`"
+  # Every text that acts on a FULLCHECK line tests it with the clean-green command, not the prefix, and
+  # fetches right before the ancestor check. Each scan first has to see its sites: a scan that matches
+  # nothing looks like one that finds nothing. Both mergeBy renderings pass through here.
+  hits=$(grep -n "all green at" "$dir/CLAUDE.md" "$dir/.claude/agents/"*.md)
+  check "$label: all-green sites found: section, three agents" "$([ "$(printf '%s\n' "$hits" | wc -l)" -ge 5 ] && echo yes)" yes
+  check "$label: every all-green line names the clean form" "$(printf '%s\n' "$hits" | grep -v 'steps cached')" ""
+  hits=$(grep -n "is-ancestor" "$dir/CLAUDE.md" "$dir/.claude/agents/"*.md)
+  check "$label: ancestor sites found: section, three agents" "$([ "$(printf '%s\n' "$hits" | wc -l)" -ge 4 ] && echo yes)" yes
+  check "$label: every ancestor check follows git fetch origin" "$(printf '%s\n' "$hits" | grep -v 'git fetch origin')" ""
+  contains "$label: merge discipline accepts only the clean green" "$md" "only on a clean green: the last line of the check's log passes \`$clean_green\` (the other lines that start"
+  contains "$label: fetch right before the ancestor check" "$md" "Then \`git fetch origin\` immediately before \`git merge-base --is-ancestor origin/main <that sha>\`"
   contains "$label: a -d refusal on the -w branch means look first" "$after" "(\`git log origin/main.."
   contains "$label: ... before forcing" "$after" "before forcing."
   check "$label: the -w branch is never force-deleted" "$(printf '%s' "$after" | grep -c 'branch -D worktree')" 0
@@ -270,7 +284,7 @@ check "lead merges: config" "$(python3 -c 'import json,sys; c=json.load(open(sys
 for f in engineer implementer checker; do
   check "lead merges: $f never runs gh pr merge" "$(grep -c 'gh pr merge' "$lead/.claude/agents/demo-$f.md")" 0
 done
-contains "lead merges: engineer stops at ready" "$(cat "$lead/.claude/agents/demo-engineer.md")" "Report the PR ready only on \`FULLCHECK: all green at <sha>\`"
+contains "lead merges: engineer stops at ready" "$(cat "$lead/.claude/agents/demo-engineer.md")" "Report the PR ready only on a clean green: the log's last line passes"
 contains "lead merges: implementer reports ready" "$(cat "$lead/.claude/agents/demo-implementer.md")" "SendMessage only: one line when a PR is ready for the lead to merge;"
 contains "lead merges: checker job" "$(cat "$lead/.claude/agents/demo-checker.md")" "## Typical job: check a PR for the lead to merge"
 md=$(cat "$lead/CLAUDE.md")
@@ -329,6 +343,8 @@ contains "merge skill: a closed PR's branch is kept" "$skill" "keep the branch o
 contains "merge skill: the -w branch keeps -d" "$skill" "\`git branch -d worktree-<task>\`"
 contains "merge skill: look before forcing" "$skill" "before forcing."
 check "merge skill: -D only on the squash or rebase line" "$(printf '%s\n' "$skill" | grep -c 'branch -D')" 1
+contains "merge skill: accepts only the clean green" "$skill" "A PR merges only on a clean green from \`<toolsDir>/fullcheck.sh\`: the last line of the check's log passes \`$clean_green\`"
+contains "merge skill: fetch right before the ancestor check" "$skill" "\`git fetch origin\` immediately before \`git merge-base --is-ancestor origin/<mainBranch> <sha>\`"
 contains "merge skill: the PR head check expands the short sha" "$skill" "\`[ \"\$(gh pr view <n> --json headRefOid --jq .headRefOid)\" = \"\$(git rev-parse <sha>)\" ]\`"
 
 # fullcheck.sh prints an abbreviated sha and `gh pr view --json headRefOid` is all 40 characters, so
@@ -338,6 +354,14 @@ contains "merge skill: the PR head check expands the short sha" "$skill" "\`[ \"
 hits=$(grep -n headRefOid "$lead/CLAUDE.md" "$lead/.claude/agents/"*.md "$KIT/plugin/skills/"*/SKILL.md)
 check "PR head sites found: section, three agents, merge skill" "$([ "$(printf '%s\n' "$hits" | wc -l)" -ge 5 ] && echo yes)" yes
 check "every headRefOid line expands the sha with git rev-parse" "$(printf '%s\n' "$hits" | grep -v 'git rev-parse')" ""
+
+# The same two scans over the skills (the section and the agents are scanned per rendering above).
+hits=$(grep -n "all green at" "$KIT/plugin/skills/"*/SKILL.md)
+check "skills: all-green site found: merge" "$([ "$(printf '%s\n' "$hits" | wc -l)" -ge 1 ] && echo yes)" yes
+check "skills: every all-green line names the clean form" "$(printf '%s\n' "$hits" | grep -v 'steps cached')" ""
+hits=$(grep -n "is-ancestor" "$KIT/plugin/skills/"*/SKILL.md)
+check "skills: ancestor sites found: merge, brief" "$([ "$(printf '%s\n' "$hits" | wc -l)" -ge 2 ] && echo yes)" yes
+check "skills: every ancestor check follows git fetch origin" "$(printf '%s\n' "$hits" | grep -v 'git fetch origin')" ""
 
 # The command from the rendered checker, run for real: the sha a real fullcheck.sh run printed, a
 # repo, and a stand-in `gh` that answers only the call the checker is told to make.
