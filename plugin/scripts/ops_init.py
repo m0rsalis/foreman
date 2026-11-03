@@ -366,22 +366,39 @@ OTHER_GREENS = ("the other lines that start `FULLCHECK: all green at` are not cl
                 "`, but HEAD is now <sha>` and `, but the working tree changed during the run` each covered something other than that commit")
 
 
+# May the PR branch be force-deleted? Exit status 0 only when PR <n> is MERGED (with a `mergedAt`) and
+# the branch's local tip IS the head the PR merged. A branch reused for a newer PR, or committed to
+# after the merge, has moved past that head: `-D` would delete work that may exist nowhere else (with
+# delete_branch_on_merge on, the remote copy is gone too). The `[ -n "$tip" ]` guard is not
+# decoration: a missing branch and a PR that is not merged would both print nothing, and two empty
+# strings compare equal. Any failure (no gh, no network) also means keep. A test runs the rendered
+# command against a stand-in `gh` that applies the `--jq` filter to canned PR JSON.
+BRANCH_DELETE_CHECK = ('tip="$(git rev-parse --verify -q refs/heads/<branch>)"; [ -n "$tip" ] && '
+                       '[ "$(gh pr view <n> --json state,mergedAt,headRefOid --jq '
+                       "'select(.state == \"MERGED\" and .mergedAt != null) | .headRefOid')\" = \"$tip\" ]")
+
+
 def branch_cleanup(method, main):
     """The "delete the branches" wording of the CLAUDE.md section, from `mergeMethod`. A squash or
     rebase merge puts new commits on the main branch, so the PR branch never becomes their ancestor
-    and `git branch -d` always refuses. The branch is then deleted with `-D`, decided on the PR's
-    state and never on ancestry: a CLOSED PR's branch may hold the only copy of the work. The
-    `worktree-<task>` branch `claude --bg -w` made keeps `-d`, so a refusal there means commits that
-    are not on the main branch."""
+    and `git branch -d` always refuses. The branch is then deleted with `-D`, but only when
+    BRANCH_DELETE_CHECK succeeds: decided on the PR's state and the branch tip, never on ancestry (a
+    CLOSED PR's branch, or one that moved past the merged head, may hold the only copy of the work).
+    The `worktree-<task>` branch `claude --bg -w` made keeps `-d`, so a refusal there means commits
+    that are not on the main branch."""
     if method == "merge":
         return ("`git branch -d <branch>` for the merged branch and `git branch -d worktree-<task>` (the branch `-w` made). "
                 f"If either `-d` refuses, that branch holds commits that are not on `{main}`: look at them "
                 f"(`git log origin/{main}..<branch>`) before forcing.")
-    return (f"the PR branch with `git branch -D <branch>`, only after `gh pr view <n> --json state,mergedAt` shows "
-            f"`state` `MERGED` and a `mergedAt` that is not null (a {method} merge puts new commits on `{main}`, so the "
-            "branch is never their ancestor and `-d` always refuses; never decide on ancestry, and keep the branch of a "
-            "`CLOSED` PR: it may hold the only copy of the work). The `worktree-<task>` branch `-w` made, when it is "
-            f"not the PR branch, keeps `git branch -d`: if that refuses, it holds commits that are not on `{main}`, so "
+    return (f"the PR branch with `git branch -D <branch>`, only when `{BRANCH_DELETE_CHECK}` succeeds: PR `<n>` shows "
+            "`state` `MERGED` and a `mergedAt` that is not null, and the branch's local tip is the head that PR merged "
+            "(`headRefOid`). A missing branch, a PR that is not merged, and a branch that moved past the merged head (reused "
+            "for a newer PR, or committed to after the merge) all fail it: keep the branch and look at "
+            f"`git log origin/{main}..<branch>` first, it may hold the only copy of that work. Run it right after the merge, "
+            "before the branch can be reused, and in any later clean-up pass too. "
+            f"(A {method} merge puts new commits on `{main}`, so the branch is never their ancestor and `-d` always refuses; "
+            "never decide on ancestry, and keep the branch of a `CLOSED` PR.) The `worktree-<task>` branch `-w` made, when it "
+            f"is not the PR branch, keeps `git branch -d`: if that refuses, it holds commits that are not on `{main}`, so "
             f"look at them (`git log origin/{main}..worktree-<task>`) before forcing.")
 
 
